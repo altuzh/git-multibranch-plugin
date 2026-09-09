@@ -271,7 +271,8 @@ public class MultiBranchCommitDialog extends DialogWrapper {
                 config.setGitLabSquashCommits(settings.getState().gitLabSquashCommits);
                 config.setGitLabMergeMr(settings.getState().gitLabMergeMr);
                 config.setGitLabHost(settings.getState().gitLabHost);
-                String token = GitLabTokenManager.getToken();
+                String detectedHost = GitLabTokenManager.detectHost(project, settings.getState().gitLabHost);
+                String token = GitLabTokenManager.getToken(detectedHost);
                 if (token != null && !token.isBlank()) {
                     config.setGitLabApiToken(token);
                 } else {

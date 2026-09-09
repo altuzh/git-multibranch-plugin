@@ -1,5 +1,8 @@
 package git.multibranch;
 
+import com.intellij.openapi.project.Project;
+import org.jetbrains.annotations.Nullable;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -32,10 +35,14 @@ public class MultiBranchConfig {
     }
 
     public static MultiBranchConfig fromSettings(MultiBranchSettings settings) {
+        return fromSettings(settings, null);
+    }
+
+    public static MultiBranchConfig fromSettings(MultiBranchSettings settings, @Nullable Project project) {
         if (settings == null || settings.getState() == null) {
             return new MultiBranchConfig();
         }
-        return settings.toConfig();
+        return settings.toConfig(project);
     }
 
     public MultiBranchConfig copy() {

@@ -477,4 +477,88 @@ public class BranchSettingsTest {
         }
         return true;
     }
+
+    @Test
+    public void testGitLabHostNormalization() {
+        assertEquals("", GitLabTokenManager.normalizeHost(null));
+        assertEquals("", GitLabTokenManager.normalizeHost("   "));
+        assertEquals("gitlab.com", GitLabTokenManager.normalizeHost("gitlab.com"));
+        assertEquals("gitlab.com", GitLabTokenManager.normalizeHost("https://gitlab.com"));
+        assertEquals("gitlab.com", GitLabTokenManager.normalizeHost("https://gitlab.com/"));
+        assertEquals("gitlab.com", GitLabTokenManager.normalizeHost("HTTPS://GITLAB.COM/API/V4"));
+        assertEquals("gitlab.corp.local:8080", GitLabTokenManager.normalizeHost("http://gitlab.corp.local:8080/api/v4"));
+        assertEquals("gitlab.example.com", GitLabTokenManager.normalizeHost("git@gitlab.example.com:group/project.git"));
+        assertEquals("gitlab.example.com", GitLabTokenManager.normalizeHost("ssh://git@gitlab.example.com:2222/group/project.git"));
+    }
+
+    @Test
+    public void testGitLabTokenManagerAccountName() {
+        assertEquals("GitLabToken", GitLabTokenManager.getAccountName(null));
+        assertEquals("GitLabToken", GitLabTokenManager.getAccountName(""));
+        assertEquals("GitLabToken_gitlab.com", GitLabTokenManager.getAccountName("https://gitlab.com"));
+        assertEquals("GitLabToken_gitlab.corp.local", GitLabTokenManager.getAccountName("gitlab.corp.local"));
+        assertEquals("GitLabToken_gitlab.corp.local:8080", GitLabTokenManager.getAccountName("http://gitlab.corp.local:8080/"));
+    }
+
+    @Test
+    public void testGitLabTokenManagerPerHostStorage() {
+        GitLabTokenManager.testFallbackStorage.clear();
+
+        // Initially empty
+        assertNull(GitLabTokenManager.getToken("https://gitlab.company-a.com"));
+        assertNull(GitLabTokenManager.getToken("https://gitlab.company-b.com"));
+
+        // Save token for Company A
+        GitLabTokenManager.setToken("https://gitlab.company-a.com", "token-aaa-123");
+        assertEquals("token-aaa-123", GitLabTokenManager.getToken("https://gitlab.company-a.com"));
+        assertEquals("token-aaa-123", GitLabTokenManager.getToken("gitlab.company-a.com"));
+        assertNull(GitLabTokenManager.getToken("https://gitlab.company-b.com"));
+
+        // Save token for Company B
+        GitLabTokenManager.setToken("http://gitlab.company-b.com:8443", "token-bbb-456");
+        assertEquals("token-aaa-123", GitLabTokenManager.getToken("https://gitlab.company-a.com"));
+        assertEquals("token-bbb-456", GitLabTokenManager.getToken("http://gitlab.company-b.com:8443/api/v4"));
+        assertNull(GitLabTokenManager.getToken("https://gitlab.com"));
+
+        // Save token for gitlab.com
+        GitLabTokenManager.setToken("gitlab.com", "token-cloud-789");
+        assertEquals("token-aaa-123", GitLabTokenManager.getToken("gitlab.company-a.com"));
+        assertEquals("token-bbb-456", GitLabTokenManager.getToken("gitlab.company-b.com:8443"));
+        assertEquals("token-cloud-789", GitLabTokenManager.getToken("https://gitlab.com"));
+
+        // Clearing token for Company A does not affect Company B or gitlab.com
+        GitLabTokenManager.setToken("gitlab.company-a.com", "");
+        assertNull(GitLabTokenManager.getToken("gitlab.company-a.com"));
+        assertEquals("token-bbb-456", GitLabTokenManager.getToken("gitlab.company-b.com:8443"));
+        assertEquals("token-cloud-789", GitLabTokenManager.getToken("https://gitlab.com"));
+    }
+
+    @Test
+    public void testGitLabTokenManagerLegacyFallbackAndMigration() {
+        GitLabTokenManager.testFallbackStorage.clear();
+
+        // Simulate legacy token in store
+        GitLabTokenManager.testFallbackStorage.put(GitLabTokenManager.LEGACY_ACCOUNT_NAME, "legacy-token-xyz");
+
+        // Requesting token for any host falls back to legacy token
+        assertEquals("legacy-token-xyz", GitLabTokenManager.getToken("gitlab.migration-test.com"));
+
+        // Saving for specific host migrates it and clears legacy to prevent leakage to other hosts
+        GitLabTokenManager.setToken("gitlab.migration-test.com", "legacy-token-xyz");
+        assertEquals("legacy-token-xyz", GitLabTokenManager.getToken("gitlab.migration-test.com"));
+
+        // Other host no longer sees the migrated legacy token
+        assertNull(GitLabTokenManager.getToken("gitlab.another-host.com"));
+    }
+
+    @Test
+    public void testGitLabTokenManagerHostDetection() {
+        // Override takes precedence
+        String host = GitLabTokenManager.detectHost((java.io.File) null, "https://override.gitlab.local");
+        assertEquals("https://override.gitlab.local", host);
+
+        // Repo dir detection
+        String detectedFromRepo = GitLabTokenManager.detectHost(new java.io.File("."), null);
+        assertNotNull(detectedFromRepo);
+    }
 }

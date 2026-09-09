@@ -38,8 +38,14 @@ An IntelliJ IDEA plugin for automating multi-branch Git workflows across target 
     - **Delete source branch** when merge request is accepted (`remove_source_branch = true`).
     - **Squash commits** when merge request is accepted (`squash = true`).
     - Reuses existing open MRs (handles HTTP 409 Conflict gracefully) instead of erroring on duplicate runs.
+  - **Per-Host Token Storage**:
+    - GitLab Personal Access Tokens are stored securely in IntelliJ IDEA's native `PasswordSafe` (Credential Store / OS Keychain) **per detected GitLab host** (e.g. `GitLabToken_gitlab.company.com`, `GitLabToken_gitlab.com`).
+    - Working on multiple repositories across different GitLab servers (corporate self-hosted, client instances, or gitlab.com) works seamlessly without token collision or having to re-authenticate.
+    - Repositories sharing the same GitLab host automatically reuse the token saved for that host.
+    - Backward-compatible: existing single-host tokens are preserved and migrated cleanly without leaking to other hosts.
   - Automatic repository origin detection (no manual repository URL configuration needed).
-  - Secure token storage via IntelliJ IDEA's native `PasswordSafe` with a built-in "Test Connection" button in Settings.
+  - Dynamic Settings UI displaying the active host in the token label (e.g. `GitLab Personal Access Token (gitlab.company.com):`) and showing the auto-detected origin URL in the host field placeholder.
+  - Built-in "Test Connection" button verifying token validity and API reachability directly from the Settings dialog.
   - Graceful fallback to pre-filled web MR creation links when API token is not configured or on network failures.
 - **Execution Review Window**:
   - Displays a comprehensive review window upon completion of all multi-branch operations, detailing branch status, commit hashes, push details, MR links, and auto-merge statuses.
@@ -73,19 +79,21 @@ To allow the plugin to automatically create Merge Requests, assign them to you, 
    - Windows/Linux: `File | Settings` (`Ctrl+Alt+S`)
    - macOS: `Preferences / Settings` (`Cmd+,`)
 2. Navigate to **Version Control** -> **Multi-Branch Workflow**.
-3. Under the **GitLab Integration** section:
+3. Under the **GitLab API & Merge Request Settings** section:
    - Check **"Create Merge Requests automatically via GitLab API after push"**.
+   - Notice the token label automatically displays your active GitLab host (e.g. `GitLab Personal Access Token (gitlab.company.com):`).
    - Paste your copied token into the **GitLab Personal Access Token** field.
-     > The token is stored securely using IntelliJ IDEA's native `PasswordSafe` (Credential Store / OS Keychain).
-   - *(Optional)* If your Git remote host differs from the web URL (e.g. internal SSH host alias), fill in **GitLab Host (optional override)**. Leave it blank to auto-detect from `git remote get-url origin`.
+     > **Per-Host Storage**: The token is stored securely using IntelliJ IDEA's native `PasswordSafe` (Credential Store / OS Keychain) keyed to the detected GitLab host. If you work across multiple GitLab servers, each server keeps its own independent token. Projects on the same GitLab host share the token automatically.
+   - *(Optional)* **GitLab Host (optional override)**: The text field placeholder indicates the auto-detected origin host (e.g. `Auto-detected: https://gitlab.company.com`). You only need to enter a host override if your Git remote URL differs from the web/API base URL (e.g. internal SSH host alias). Switching hosts will automatically switch to the saved token for that target host.
    - Configure MR behavior:
      - **Assign Merge Request to authenticated user (login person)**: Automatically assigns the created MR to your account.
      - **Delete source branch when merge request is accepted**: Sets `remove_source_branch = true`.
      - **Squash commits when merge request is accepted**: Sets `squash = true`.
+     - **Merge MR automatically after creation via GitLab API (Merge MR)**: Automatically accepts/merges created MRs for branches with "Allow merge" enabled.
 4. Click the **Test Connection** button:
-   - A green confirmation message will display: `Connected as: Full Name (@username)`.
+   - A green confirmation message will display: `Connection successful! Connected as: Full Name (@username)`.
 5. Under **Default Commit & Push Options**:
-   - Ensure **"Open created MRs automatically in browser"** is checked if you want your browser to immediately open each created MR.
+   - Ensure **"Open created MRs automatically in browser"** is checked if you want your browser to open created MRs (note: automatically suppressed on successful merge when Merge MR is enabled).
 6. Click **Apply** and **OK**.
 
 ## Building the Plugin

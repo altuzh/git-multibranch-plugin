@@ -410,9 +410,45 @@ public class GitLabApiService {
             pb.directory(repoDir);
             pb.redirectErrorStream(true);
             Process p = pb.start();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
-                String line = reader.readLine();
-                if (line != null) return line.trim();
+            boolean finished = p.waitFor(3, java.util.concurrent.TimeUnit.SECONDS);
+            if (finished && p.exitValue() == 0) {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(p.getInputStream(), StandardCharsets.UTF_8))) {
+                    String line = reader.readLine();
+                    if (line != null && !line.isBlank() && !line.startsWith("fatal:") && !line.startsWith("error:")) {
+                        return line.trim();
+                    }
+                }
+            } else {
+                p.destroyForcibly();
+                // If origin remote doesn't exist, try first available remote
+                ProcessBuilder pbList = new ProcessBuilder("git", "remote");
+                pbList.directory(repoDir);
+                pbList.redirectErrorStream(true);
+                Process pList = pbList.start();
+                String firstRemote = null;
+                if (pList.waitFor(3, java.util.concurrent.TimeUnit.SECONDS) && pList.exitValue() == 0) {
+                    try (BufferedReader reader = new BufferedReader(new InputStreamReader(pList.getInputStream(), StandardCharsets.UTF_8))) {
+                        firstRemote = reader.readLine();
+                    }
+                } else {
+                    pList.destroyForcibly();
+                }
+                if (firstRemote != null && !firstRemote.isBlank() && !firstRemote.startsWith("fatal:")) {
+                    ProcessBuilder pbFirst = new ProcessBuilder("git", "remote", "get-url", firstRemote.trim());
+                    pbFirst.directory(repoDir);
+                    pbFirst.redirectErrorStream(true);
+                    Process pFirst = pbFirst.start();
+                    if (pFirst.waitFor(3, java.util.concurrent.TimeUnit.SECONDS) && pFirst.exitValue() == 0) {
+                        try (BufferedReader reader = new BufferedReader(new InputStreamReader(pFirst.getInputStream(), StandardCharsets.UTF_8))) {
+                            String line = reader.readLine();
+                            if (line != null && !line.isBlank() && !line.startsWith("fatal:") && !line.startsWith("error:")) {
+                                return line.trim();
+                            }
+                        }
+                    } else {
+                        pFirst.destroyForcibly();
+                    }
+                }
             }
         } catch (Exception ignored) {}
         return "";

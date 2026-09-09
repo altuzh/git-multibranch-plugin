@@ -87,7 +87,7 @@ public class MultiBranchCommitAction extends AnAction {
 
     private static void startMultiBranchWorkflow(@NotNull Project project, @NotNull GitRepository repository) {
         MultiBranchSettings settings = MultiBranchSettings.getInstance(project);
-        MultiBranchConfig config = MultiBranchConfig.fromSettings(settings);
+        MultiBranchConfig config = MultiBranchConfig.fromSettings(settings, project);
 
         String currentBranch = repository.getCurrentBranchName();
         BranchDetectionResult detection = detectBranchContext(currentBranch, config.getBranchMappings());

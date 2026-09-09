@@ -108,7 +108,16 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
         }
     }
 
+    private final Project myProject;
     private State myState = new State();
+
+    public MultiBranchSettings() {
+        this(null);
+    }
+
+    public MultiBranchSettings(@Nullable Project project) {
+        this.myProject = project;
+    }
 
     public static @Nullable MultiBranchSettings getInstance(@Nullable Project project) {
         if (project == null || project.isDefault()) {
@@ -131,6 +140,10 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
     }
 
     public MultiBranchConfig toConfig() {
+        return toConfig(myProject);
+    }
+
+    public MultiBranchConfig toConfig(@Nullable Project project) {
         MultiBranchConfig config = new MultiBranchConfig();
         config.getBranchMappings().clear();
         if (myState.branchMappings != null) {
@@ -157,7 +170,8 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
         config.setGitLabSquashCommits(myState.gitLabSquashCommits);
         config.setGitLabMergeMr(myState.gitLabMergeMr);
         config.setGitLabHost(myState.gitLabHost);
-        String token = GitLabTokenManager.getToken();
+        String detectedHost = GitLabTokenManager.detectHost(project, myState.gitLabHost);
+        String token = GitLabTokenManager.getToken(detectedHost);
         if (token != null && !token.isBlank()) {
             config.setGitLabApiToken(token);
         } else {

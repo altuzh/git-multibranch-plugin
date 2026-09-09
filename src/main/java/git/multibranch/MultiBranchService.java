@@ -151,9 +151,10 @@ public class MultiBranchService {
                     }
 
                     // 7. Initialize GitLab API user if token & auto-assign are enabled
+                    String detectedHost = GitLabTokenManager.detectHost(repoDir, config.getGitLabHost());
                     String gitLabToken = config.getGitLabApiToken();
                     if (gitLabToken == null || gitLabToken.isBlank()) {
-                        gitLabToken = GitLabTokenManager.getToken();
+                        gitLabToken = GitLabTokenManager.getToken(detectedHost);
                     }
 
                     Integer gitLabUserId = null;

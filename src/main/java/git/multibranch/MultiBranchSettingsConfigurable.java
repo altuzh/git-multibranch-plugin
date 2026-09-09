@@ -34,6 +34,7 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
 
     // GitLab API Configuration
     private JBCheckBox gitLabCreateMrCheckbox;
+    private JBLabel gitLabTokenLabel;
     private JPasswordField gitLabTokenField;
     private JButton testConnectionBtn;
     private JLabel testStatusLabel;
@@ -42,6 +43,7 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
     private JBCheckBox gitLabSquashCommitsCheckbox;
     private JBCheckBox gitLabMergeMrCheckbox;
     private JBTextField gitLabHostField;
+    private String currentLoadedHost = "";
 
     public MultiBranchSettingsConfigurable(@NotNull Project project) {
         this.project = project;
@@ -87,7 +89,8 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
 
         glGbc.gridy++;
         JPanel tokenRow = new JPanel(new BorderLayout(JBUI.scale(8), 0));
-        tokenRow.add(new JBLabel("GitLab Personal Access Token:"), BorderLayout.WEST);
+        gitLabTokenLabel = new JBLabel("GitLab Personal Access Token:");
+        tokenRow.add(gitLabTokenLabel, BorderLayout.WEST);
         gitLabTokenField = new JPasswordField();
         tokenRow.add(gitLabTokenField, BorderLayout.CENTER);
 
@@ -119,6 +122,17 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         hostRow.add(new JBLabel("GitLab Host (optional override):"), BorderLayout.WEST);
         gitLabHostField = new JBTextField();
         gitLabHostField.getEmptyText().setText("e.g. https://gitlab.example.com (auto-detected from origin remote if blank)");
+        gitLabHostField.addFocusListener(new java.awt.event.FocusAdapter() {
+            @Override
+            public void focusLost(java.awt.event.FocusEvent e) {
+                updateHostUI(false);
+            }
+        });
+        gitLabHostField.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            @Override public void insertUpdate(javax.swing.event.DocumentEvent e) { updateHostLabelOnly(); }
+            @Override public void removeUpdate(javax.swing.event.DocumentEvent e) { updateHostLabelOnly(); }
+            @Override public void changedUpdate(javax.swing.event.DocumentEvent e) { updateHostLabelOnly(); }
+        });
         hostRow.add(gitLabHostField, BorderLayout.CENTER);
         gitLabPanel.add(hostRow, glGbc);
 
@@ -190,12 +204,58 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         return rootPanel;
     }
 
+    private void updateHostLabelOnly() {
+        if (gitLabTokenLabel == null || gitLabHostField == null) return;
+        String rawHost = gitLabHostField.getText().trim();
+        String effectiveHost = GitLabTokenManager.detectHost(project, rawHost);
+        String normalized = GitLabTokenManager.normalizeHost(effectiveHost);
+        if (!normalized.isEmpty()) {
+            gitLabTokenLabel.setText("GitLab Personal Access Token (" + normalized + "):");
+        } else {
+            gitLabTokenLabel.setText("GitLab Personal Access Token:");
+        }
+    }
+
+    private void updateHostUI(boolean forceReloadToken) {
+        updateHostLabelOnly();
+        if (gitLabHostField == null || gitLabTokenField == null) return;
+        String rawHost = gitLabHostField.getText().trim();
+        String effectiveHost = GitLabTokenManager.detectHost(project, rawHost);
+
+        String autoDetected = GitLabTokenManager.detectHost(project, null);
+        if (!autoDetected.isBlank()) {
+            gitLabHostField.getEmptyText().setText("Auto-detected: " + autoDetected + " (leave blank to use, or enter override)");
+        } else {
+            gitLabHostField.getEmptyText().setText("e.g. https://gitlab.example.com (auto-detected from origin remote if blank)");
+        }
+
+        if (forceReloadToken || !Objects.equals(effectiveHost, currentLoadedHost)) {
+            String curPassword = new String(gitLabTokenField.getPassword()).trim();
+            String oldSaved = GitLabTokenManager.getToken(currentLoadedHost);
+            if (forceReloadToken || curPassword.isEmpty() || Objects.equals(curPassword, oldSaved != null ? oldSaved : "")) {
+                String newToken = GitLabTokenManager.getToken(effectiveHost);
+                gitLabTokenField.setText(newToken != null ? newToken : "");
+            }
+            currentLoadedHost = effectiveHost;
+        }
+    }
+
     private void runTestConnection() {
-        String token = new String(gitLabTokenField.getPassword()).trim();
         String host = gitLabHostField.getText().trim();
+        String effectiveHost = GitLabTokenManager.detectHost(project, host);
+        String token = new String(gitLabTokenField.getPassword()).trim();
+        if (token.isBlank()) {
+            token = GitLabTokenManager.getToken(effectiveHost);
+        }
+        if (token == null || token.isBlank()) {
+            testStatusLabel.setText("Error: GitLab API Token is empty.");
+            testStatusLabel.setForeground(JBUI.CurrentTheme.NotificationError.foregroundColor());
+            return;
+        }
         testStatusLabel.setText("Testing connection...");
         testStatusLabel.setForeground(JBUI.CurrentTheme.Label.foreground());
 
+        final String finalToken = token;
         SwingWorker<String, Void> worker = new SwingWorker<>() {
             @Override
             protected String doInBackground() {
@@ -207,17 +267,19 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
                         h = "https://" + h;
                     }
                     apiUrl = h + "/api/v4";
-                } else if (project != null && project.getBasePath() != null) {
-                    GitLabApiService.GitLabProjectInfo info = GitLabApiService.parseProjectInfo(
-                            GitLabApiService.getOriginRemoteUrl(new File(project.getBasePath())), null);
-                    if (info != null) {
-                        apiUrl = info.getApiUrl();
+                } else {
+                    String detected = GitLabTokenManager.detectHost(project, null);
+                    if (!detected.isBlank()) {
+                        if (!detected.startsWith("http://") && !detected.startsWith("https://")) {
+                            detected = "https://" + detected;
+                        }
+                        apiUrl = detected + "/api/v4";
                     }
                 }
                 if (apiUrl == null) {
                     return "Error: Cannot determine GitLab API URL. Please specify GitLab Host.";
                 }
-                return GitLabApiService.testConnection(apiUrl, token);
+                return GitLabApiService.testConnection(apiUrl, finalToken);
             }
 
             @Override
@@ -264,7 +326,8 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         if (!Objects.equals(gitLabHostField.getText().trim(), state.gitLabHost != null ? state.gitLabHost : "")) return true;
 
         String curToken = new String(gitLabTokenField.getPassword()).trim();
-        String savedToken = GitLabTokenManager.getToken();
+        String effectiveHost = GitLabTokenManager.detectHost(project, gitLabHostField.getText().trim());
+        String savedToken = GitLabTokenManager.getToken(effectiveHost);
         if (savedToken == null || savedToken.isBlank()) {
             savedToken = state.gitLabApiToken != null ? state.gitLabApiToken : "";
         }
@@ -304,9 +367,11 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
             state.gitLabMergeMr = gitLabMergeMrCheckbox.isSelected();
             state.gitLabHost = gitLabHostField.getText().trim();
 
+            String effectiveHost = GitLabTokenManager.detectHost(project, state.gitLabHost);
             String token = new String(gitLabTokenField.getPassword()).trim();
-            GitLabTokenManager.setToken(token);
+            GitLabTokenManager.setToken(effectiveHost, token);
             state.gitLabApiToken = token;
+            currentLoadedHost = effectiveHost;
         }
     }
 
@@ -333,11 +398,11 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         gitLabMergeMrCheckbox.setSelected(state.gitLabMergeMr);
         gitLabHostField.setText(state.gitLabHost != null ? state.gitLabHost : "");
 
-        String token = GitLabTokenManager.getToken();
-        if (token == null || token.isBlank()) {
-            token = state.gitLabApiToken != null ? state.gitLabApiToken : "";
+        updateHostUI(true);
+        String curToken = new String(gitLabTokenField.getPassword()).trim();
+        if (curToken.isEmpty() && state.gitLabApiToken != null && !state.gitLabApiToken.isBlank()) {
+            gitLabTokenField.setText(state.gitLabApiToken);
         }
-        gitLabTokenField.setText(token);
         testStatusLabel.setText("");
 
         generateMrLinksCheckbox.setEnabled(state.pushAfterCommit);
@@ -368,6 +433,7 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         checkoutTestCheckbox = null;
         prefixMessageCheckbox = null;
         gitLabCreateMrCheckbox = null;
+        gitLabTokenLabel = null;
         gitLabTokenField = null;
         testConnectionBtn = null;
         testStatusLabel = null;
