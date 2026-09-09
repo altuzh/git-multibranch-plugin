@@ -13,12 +13,11 @@ An IntelliJ IDEA plugin for automating multi-branch Git workflows across target 
   - Automatically identifies whether you are currently on one of the target task branches (e.g. `TASK-101-dev`), extracts task prefix cleanly, and highlights the current branch in the dialog UI with `[CURRENT BRANCH]`.
   - Tags branches already existing on origin with `[ON REMOTE]`.
 - **Configurable Branch Mappings**:
-  - Configure target branches via **Settings -> Version Control -> Multi-Branch Workflow** or via the **Configure Branches...** button in the commit dialog.
+  - Configure target branches via **Settings -> Version Control -> Multi-Branch Workflow** or via the **Settings...** button in the commit dialog.
   - Add, edit, remove, reorder, or reset branch mappings (source tracking branch, MR merge target branch, local branch suffix, enabled/disabled by default).
-  - **"Allow merge" Column**: Configure which branches allow automated MR merging. If unchecked, the Merge MR option will not be applied to this branch.
   - Customize post-action checkout branch (defaults to `deploy/test`).
 - **Confirmation Window with Planned Actions**:
-  - Displays an interactive confirmation window before executing multi-branch operations, detailing every upcoming action: worktree checkouts, patch applications, commits, pushes, MR creations, and auto-merge actions.
+  - Displays an interactive confirmation window before executing multi-branch operations, detailing every upcoming action: worktree checkouts, patch applications, commits, pushes, and MR creations.
 - **Targeted Changelist Filtering**:
   - Extracts only modified files from the chosen IntelliJ changelist (e.g. `Changes`), completely ignoring other folders/changelists.
 - **Commit Message History**:
@@ -26,13 +25,11 @@ An IntelliJ IDEA plugin for automating multi-branch Git workflows across target 
   - Saves all commit messages into IDEA's recent messages list.
 - **Working Tree Protection (Stash, Fetch & Checkout)**:
   - If uncommitted changes exist in other folders/changelists (e.g. `pom.xml`, local configs), the plugin safely stashes them before commit actions.
-  - **Fetch Post-Action Checkout Branch**: Automatically fetches `origin/<checkoutBranch>` to update remote refs with the latest commits (including newly merged MR commits).
+  - **Fetch Post-Action Checkout Branch**: Automatically fetches `origin/<checkoutBranch>` to update remote refs with the latest commits (including any newly pushed commits).
   - Automatically checks out the configured branch (`deploy/test` by default) after actions complete and fast-forwards to latest origin.
   - Restores the stashed changes via `git stash pop` on top of the checkout branch.
-- **Automated GitLab Merge Requests & Auto-Merge (Merge MR)**:
+- **Automated GitLab Merge Requests**:
   - Automatically creates Merge Requests directly via GitLab API upon successful push.
-  - **Merge MR Option**: Automatically merges/accepts created MRs via GitLab API (`PUT /api/v4/projects/:id/merge_requests/:iid/merge`) for branches with "Allow merge" enabled.
-  - **Smart Browser Management**: If MR merge succeeds with no errors, opening the success MR in the browser is suppressed. If an error occurs during merge (e.g. conflict, discussions required), the MR is opened in the browser for developer inspection.
   - Automatically assigns created MRs to the authenticated user (login person) by querying `/api/v4/user`.
   - Configurable GitLab options:
     - **Delete source branch** when merge request is accepted (`remove_source_branch = true`).
@@ -48,7 +45,7 @@ An IntelliJ IDEA plugin for automating multi-branch Git workflows across target 
   - Built-in "Test Connection" button verifying token validity and API reachability directly from the Settings dialog.
   - Graceful fallback to pre-filled web MR creation links when API token is not configured or on network failures.
 - **Execution Review Window**:
-  - Displays a comprehensive review window upon completion of all multi-branch operations, detailing branch status, commit hashes, push details, MR links, and auto-merge statuses.
+  - Displays a comprehensive review window upon completion of all multi-branch operations, detailing branch status, commit hashes, push details, and MR links.
 - **Convenient UI Entry Points**:
   - Status Bar Widget: dynamically shows branch count (e.g. `Multi-Branch (4)`) on the bottom status bar.
   - Bottom Git Branch Popup: Pinned at the top of the branch menu.
@@ -89,11 +86,10 @@ To allow the plugin to automatically create Merge Requests, assign them to you, 
      - **Assign Merge Request to authenticated user (login person)**: Automatically assigns the created MR to your account.
      - **Delete source branch when merge request is accepted**: Sets `remove_source_branch = true`.
      - **Squash commits when merge request is accepted**: Sets `squash = true`.
-     - **Merge MR automatically after creation via GitLab API (Merge MR)**: Automatically accepts/merges created MRs for branches with "Allow merge" enabled.
 4. Click the **Test Connection** button:
    - A green confirmation message will display: `Connection successful! Connected as: Full Name (@username)`.
 5. Under **Default Commit & Push Options**:
-   - Ensure **"Open created MRs automatically in browser"** is checked if you want your browser to open created MRs (note: automatically suppressed on successful merge when Merge MR is enabled).
+   - Ensure **"Open created MRs automatically in browser"** is checked if you want your browser to open created MRs.
 6. Click **Apply** and **OK**.
 
 ## Building the Plugin

@@ -23,14 +23,14 @@ public class ConfigureBranchesDialog extends DialogWrapper {
     public ConfigureBranchesDialog(@Nullable Project project) {
         super(project, true);
         this.project = project;
-        setTitle("Configure Target Branches");
+        setTitle("Settings (v" + MultiBranchReloadAction.getRunningVersion() + ")");
         init();
     }
 
     @Override
     protected @Nullable JComponent createCenterPanel() {
         JPanel root = new JPanel(new BorderLayout(0, JBUI.scale(10)));
-        root.setPreferredSize(new Dimension(JBUI.scale(680), JBUI.scale(460)));
+        root.setPreferredSize(new Dimension(JBUI.scale(700), JBUI.scale(480)));
 
         // Description header
         JPanel headerPanel = new JPanel(new BorderLayout());
@@ -59,7 +59,7 @@ public class ConfigureBranchesDialog extends DialogWrapper {
         }
         root.add(tablePanel, BorderLayout.CENTER);
 
-        // Bottom: Post-Action Checkout Branch Configuration
+        // Post-Action Checkout Branch Configuration
         JPanel bottomOptions = new JPanel(new BorderLayout(JBUI.scale(8), 0));
         bottomOptions.setBorder(BorderFactory.createTitledBorder("Post-Action Settings"));
 

@@ -86,30 +86,6 @@ public class GitLabApiService {
         public boolean isExisting() { return existing; }
     }
 
-    public static class MergeMrResult {
-        private final boolean success;
-        private final String message;
-        private final String mergeCommitSha;
-
-        public MergeMrResult(boolean success, String message, String mergeCommitSha) {
-            this.success = success;
-            this.message = message;
-            this.mergeCommitSha = mergeCommitSha;
-        }
-
-        public static MergeMrResult success(String message, String mergeCommitSha) {
-            return new MergeMrResult(true, message, mergeCommitSha);
-        }
-
-        public static MergeMrResult error(String message) {
-            return new MergeMrResult(false, message, null);
-        }
-
-        public boolean isSuccess() { return success; }
-        public String getMessage() { return message; }
-        public String getMergeCommitSha() { return mergeCommitSha; }
-    }
-
     public static GitLabProjectInfo parseProjectInfo(String remoteUrl, String hostOverride) {
         if (remoteUrl == null || remoteUrl.isBlank()) return null;
         String raw = remoteUrl.trim();
@@ -262,9 +238,12 @@ public class GitLabApiService {
             if (checkResp.statusCode() == 200) {
                 String body = checkResp.body().trim();
                 if (body.startsWith("[") && body.length() > 2) {
-                    int iid = extractIntJson(body, "iid");
-                    String webUrl = extractStringJson(body, "web_url");
-                    if (webUrl != null && !webUrl.isBlank()) {
+                    int iid = extractTopLevelInt(body, "iid");
+                    String webUrl = extractMrWebUrl(body);
+                    if (iid > 0) {
+                        if (webUrl == null || !webUrl.contains("/merge_requests/")) {
+                            webUrl = info.getWebProjectUrl() + "/-/merge_requests/" + iid;
+                        }
                         return MrResult.success(webUrl, iid, "Existing open MR", true);
                     }
                 }
@@ -298,16 +277,57 @@ public class GitLabApiService {
             HttpResponse<String> postResp = HTTP_CLIENT.send(postReq, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (postResp.statusCode() == 201) {
                 String body = postResp.body();
-                int iid = extractIntJson(body, "iid");
-                String webUrl = extractStringJson(body, "web_url");
+                int iid = extractTopLevelInt(body, "iid");
+                String webUrl = extractMrWebUrl(body);
+                if (iid > 0 && (webUrl == null || !webUrl.contains("/merge_requests/"))) {
+                    webUrl = info.getWebProjectUrl() + "/-/merge_requests/" + iid;
+                }
                 return MrResult.success(webUrl, iid, "Created via API", false);
             } else if (postResp.statusCode() == 409) {
-                // Conflict - check again for existing MR
-                String webUrl = extractStringJson(postResp.body(), "web_url");
-                int iid = extractIntJson(postResp.body(), "iid");
-                if (webUrl != null && !webUrl.isBlank()) {
-                    return MrResult.success(webUrl, iid, "Existing MR", true);
+                // Conflict - an MR already exists for this branch
+                String postBody = postResp.body();
+                int existingIid = extractTopLevelInt(postBody, "iid");
+                if (existingIid <= 0) {
+                    Matcher m = Pattern.compile("!(\\d+)").matcher(postBody);
+                    if (m.find()) {
+                        try {
+                            existingIid = Integer.parseInt(m.group(1));
+                        } catch (NumberFormatException ignored) {}
+                    }
                 }
+
+                String webUrl = extractMrWebUrl(postBody);
+                if (existingIid > 0) {
+                    if (webUrl == null || !webUrl.contains("/merge_requests/")) {
+                        webUrl = info.getWebProjectUrl() + "/-/merge_requests/" + existingIid;
+                    }
+                    return MrResult.success(webUrl, existingIid, "Existing MR !" + existingIid, true);
+                }
+
+                // Query GitLab API to locate the existing open MR for this source branch
+                try {
+                    String queryUrl = info.getApiUrl() + "/projects/" + info.getEncodedPath() + "/merge_requests"
+                            + "?source_branch=" + URLEncoder.encode(sourceBranch, StandardCharsets.UTF_8)
+                            + "&state=opened";
+                    HttpRequest findReq = HttpRequest.newBuilder()
+                            .uri(URI.create(queryUrl))
+                            .timeout(Duration.ofSeconds(10))
+                            .header("PRIVATE-TOKEN", token.trim())
+                            .GET()
+                            .build();
+                    HttpResponse<String> findResp = HTTP_CLIENT.send(findReq, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                    if (findResp.statusCode() == 200 && findResp.body().trim().startsWith("[") && findResp.body().trim().length() > 2) {
+                        int fIid = extractTopLevelInt(findResp.body(), "iid");
+                        String fUrl = extractMrWebUrl(findResp.body());
+                        if (fIid > 0) {
+                            if (fUrl == null || !fUrl.contains("/merge_requests/")) {
+                                fUrl = info.getWebProjectUrl() + "/-/merge_requests/" + fIid;
+                            }
+                            return MrResult.success(fUrl, fIid, "Existing open MR !" + fIid, true);
+                        }
+                    }
+                } catch (Exception ignored) {}
+
                 return MrResult.error("Merge request already exists for " + sourceBranch + " -> " + targetBranch);
             } else {
                 return MrResult.error("GitLab API error (HTTP " + postResp.statusCode() + "): " + postResp.body());
@@ -315,78 +335,6 @@ public class GitLabApiService {
         } catch (Exception ex) {
             return MrResult.error("Failed to create MR via API: " + ex.getMessage());
         }
-    }
-
-    public static MergeMrResult mergeMergeRequest(
-            File repoDir,
-            String hostOverride,
-            String token,
-            int mrIid,
-            boolean squash,
-            boolean shouldRemoveSourceBranch
-    ) {
-        if (mrIid <= 0) {
-            return MergeMrResult.error("Invalid Merge Request IID: " + mrIid);
-        }
-        if (token == null || token.isBlank()) {
-            return MergeMrResult.error("GitLab API Token is required to merge MR.");
-        }
-        String remoteUrl = getOriginRemoteUrl(repoDir);
-        GitLabProjectInfo info = parseProjectInfo(remoteUrl, hostOverride);
-        if (info == null) {
-            return MergeMrResult.error("Unable to parse GitLab project from git origin URL: " + remoteUrl);
-        }
-
-        String mergeUrl = info.getApiUrl() + "/projects/" + info.getEncodedPath() + "/merge_requests/" + mrIid + "/merge";
-        StringBuilder json = new StringBuilder();
-        json.append("{");
-        json.append("\"squash\":").append(squash).append(",");
-        json.append("\"should_remove_source_branch\":").append(shouldRemoveSourceBranch);
-        json.append("}");
-
-        for (int attempt = 1; attempt <= 3; attempt++) {
-            try {
-                HttpRequest putReq = HttpRequest.newBuilder()
-                        .uri(URI.create(mergeUrl))
-                        .timeout(Duration.ofSeconds(15))
-                        .header("PRIVATE-TOKEN", token.trim())
-                        .header("Content-Type", "application/json")
-                        .PUT(HttpRequest.BodyPublishers.ofString(json.toString(), StandardCharsets.UTF_8))
-                        .build();
-
-                HttpResponse<String> response = HTTP_CLIENT.send(putReq, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-                int status = response.statusCode();
-                String body = response.body() != null ? response.body().trim() : "";
-
-                if (status == 200 || status == 202) {
-                    String sha = extractStringJson(body, "merge_commit_sha");
-                    if (sha == null || sha.isBlank()) {
-                        sha = extractStringJson(body, "sha");
-                    }
-                    String state = extractStringJson(body, "state");
-                    String msg = (state != null && !state.isBlank()) ? "MR state: " + state : "Merged successfully";
-                    return MergeMrResult.success(msg, sha);
-                } else if ((status == 405 || status == 406) && attempt < 3) {
-                    try {
-                        Thread.sleep(1500);
-                    } catch (InterruptedException ignored) {}
-                    continue;
-                } else {
-                    String errMsg = extractStringJson(body, "message");
-                    if (errMsg == null || errMsg.isBlank()) {
-                        errMsg = body.length() > 200 ? body.substring(0, 200) : body;
-                    }
-                    return MergeMrResult.error("HTTP " + status + (errMsg.isBlank() ? "" : ": " + errMsg));
-                }
-            } catch (Exception ex) {
-                if (attempt < 3) {
-                    try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
-                    continue;
-                }
-                return MergeMrResult.error("Merge request call failed: " + ex.getMessage());
-            }
-        }
-        return MergeMrResult.error("Merge request could not be merged after retries.");
     }
 
     public static String generateWebMrUrl(File repoDir, String hostOverride, String sourceBranch, String targetBranch) {
@@ -476,6 +424,147 @@ public class GitLabApiService {
         }
         sb.append("\"");
         return sb.toString();
+    }
+
+    public static String extractMrWebUrl(String json) {
+        if (json == null || json.isBlank()) return null;
+        // Specifically look for a web_url that points to a merge request or pull request
+        Pattern p = Pattern.compile("\"web_url\"\\s*:\\s*\"([^\"]*(?:/merge_requests/|/pull/)[^\"]*)\"");
+        Matcher m = p.matcher(json);
+        if (m.find()) {
+            return m.group(1).replace("\\/", "/").replace("\\\"", "\"");
+        }
+        // Fallback: search for top-level web_url avoiding nested author/assignee objects
+        String topLevel = extractTopLevelString(json, "web_url");
+        if (topLevel != null && !topLevel.isBlank()) {
+            return topLevel;
+        }
+        return null;
+    }
+
+    public static String extractTopLevelString(String json, String key) {
+        if (json == null || key == null || json.isBlank()) return null;
+        String trimmed = json.trim();
+        int targetDepth = trimmed.startsWith("[") ? 2 : 1;
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+
+        for (int i = 0; i < trimmed.length(); i++) {
+            char c = trimmed.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (c == '"') {
+                if (!inString && depth == targetDepth) {
+                    int start = i + 1;
+                    int end = trimmed.indexOf('"', start);
+                    while (end != -1 && trimmed.charAt(end - 1) == '\\') {
+                        end = trimmed.indexOf('"', end + 1);
+                    }
+                    if (end != -1) {
+                        String k = trimmed.substring(start, end);
+                        if (k.equals(key)) {
+                            int colon = trimmed.indexOf(':', end + 1);
+                            if (colon != -1) {
+                                int valIdx = colon + 1;
+                                while (valIdx < trimmed.length() && Character.isWhitespace(trimmed.charAt(valIdx))) {
+                                    valIdx++;
+                                }
+                                if (valIdx < trimmed.length() && trimmed.charAt(valIdx) == '"') {
+                                    StringBuilder val = new StringBuilder();
+                                    boolean vEscaped = false;
+                                    for (int j = valIdx + 1; j < trimmed.length(); j++) {
+                                        char vc = trimmed.charAt(j);
+                                        if (vEscaped) {
+                                            val.append(vc);
+                                            vEscaped = false;
+                                        } else if (vc == '\\') {
+                                            vEscaped = true;
+                                        } else if (vc == '"') {
+                                            return val.toString().replace("\\/", "/").replace("\\\"", "\"");
+                                        } else {
+                                            val.append(vc);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                inString = !inString;
+                continue;
+            }
+            if (!inString) {
+                if (c == '{' || c == '[') depth++;
+                else if (c == '}' || c == ']') depth--;
+            }
+        }
+        return null;
+    }
+
+    public static int extractTopLevelInt(String json, String key) {
+        if (json == null || key == null || json.isBlank()) return 0;
+        String trimmed = json.trim();
+        int targetDepth = trimmed.startsWith("[") ? 2 : 1;
+        int depth = 0;
+        boolean inString = false;
+        boolean escaped = false;
+
+        for (int i = 0; i < trimmed.length(); i++) {
+            char c = trimmed.charAt(i);
+            if (escaped) {
+                escaped = false;
+                continue;
+            }
+            if (c == '\\') {
+                escaped = true;
+                continue;
+            }
+            if (c == '"') {
+                if (!inString && depth == targetDepth) {
+                    int start = i + 1;
+                    int end = trimmed.indexOf('"', start);
+                    while (end != -1 && trimmed.charAt(end - 1) == '\\') {
+                        end = trimmed.indexOf('"', end + 1);
+                    }
+                    if (end != -1) {
+                        String k = trimmed.substring(start, end);
+                        if (k.equals(key)) {
+                            int colon = trimmed.indexOf(':', end + 1);
+                            if (colon != -1) {
+                                int valIdx = colon + 1;
+                                while (valIdx < trimmed.length() && Character.isWhitespace(trimmed.charAt(valIdx))) {
+                                    valIdx++;
+                                }
+                                StringBuilder num = new StringBuilder();
+                                while (valIdx < trimmed.length() && (Character.isDigit(trimmed.charAt(valIdx)) || trimmed.charAt(valIdx) == '-')) {
+                                    num.append(trimmed.charAt(valIdx));
+                                    valIdx++;
+                                }
+                                if (num.length() > 0) {
+                                    try {
+                                        return Integer.parseInt(num.toString());
+                                    } catch (NumberFormatException ignored) {}
+                                }
+                            }
+                        }
+                    }
+                }
+                inString = !inString;
+                continue;
+            }
+            if (!inString) {
+                if (c == '{' || c == '[') depth++;
+                else if (c == '}' || c == ']') depth--;
+            }
+        }
+        return extractIntJson(json, key);
     }
 
     public static String extractStringJson(String json, String key) {

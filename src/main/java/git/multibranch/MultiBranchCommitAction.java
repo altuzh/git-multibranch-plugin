@@ -86,6 +86,8 @@ public class MultiBranchCommitAction extends AnAction {
     }
 
     private static void startMultiBranchWorkflow(@NotNull Project project, @NotNull GitRepository repository) {
+        MultiBranchService.syncDocumentsToDisk(project);
+
         MultiBranchSettings settings = MultiBranchSettings.getInstance(project);
         MultiBranchConfig config = MultiBranchConfig.fromSettings(settings, project);
 
@@ -94,6 +96,8 @@ public class MultiBranchCommitAction extends AnAction {
 
         MultiBranchCommitDialog dialog = new MultiBranchCommitDialog(project, config, detection.getDetectedPrefix(), detection);
         if (dialog.showAndGet()) {
+            MultiBranchService.syncDocumentsToDisk(project);
+
             MultiBranchConfirmDialog confirmDialog = new MultiBranchConfirmDialog(project, repository, dialog.getConfig());
             if (confirmDialog.showAndGet()) {
                 MultiBranchService.execute(project, repository, dialog.getConfig());

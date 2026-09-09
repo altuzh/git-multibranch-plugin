@@ -2,6 +2,7 @@ package git.multibranch;
 
 import org.junit.jupiter.api.Test;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -110,14 +111,48 @@ public class BranchSettingsTest {
 
         assertEquals("[PROJ-99] Fix critical null pointer", config.getFormattedCommitMessage());
 
-        // Avoid double prefixing
+        // Avoid double prefixing when exact tag present
+        config.setCommitMessage("[PROJ-99] Fix critical null pointer");
+        assertEquals("[PROJ-99] Fix critical null pointer", config.getFormattedCommitMessage());
+
+        // Case-insensitive bracketed tag
+        config.setCommitMessage("[proj-99] Fix critical null pointer");
+        assertEquals("[proj-99] Fix critical null pointer", config.getFormattedCommitMessage());
+
+        // Prefix without brackets: colon separated
+        config.setCommitMessage("PROJ-99: Fix critical null pointer");
+        assertEquals("PROJ-99: Fix critical null pointer", config.getFormattedCommitMessage());
+
+        // Prefix without brackets: dash separated
+        config.setCommitMessage("PROJ-99 - Fix critical null pointer");
+        assertEquals("PROJ-99 - Fix critical null pointer", config.getFormattedCommitMessage());
+
+        // Prefix without brackets: space separated
+        config.setCommitMessage("PROJ-99 Fix critical null pointer");
+        assertEquals("PROJ-99 Fix critical null pointer", config.getFormattedCommitMessage());
+
+        // Prefix within message text
+        config.setCommitMessage("Fix critical null pointer for PROJ-99");
+        assertEquals("Fix critical null pointer for PROJ-99", config.getFormattedCommitMessage());
+
+        // Prefix in parentheses
+        config.setCommitMessage("Fix critical null pointer (PROJ-99)");
+        assertEquals("Fix critical null pointer (PROJ-99)", config.getFormattedCommitMessage());
+
+        // Substring prefix with different issue number should NOT match
+        config.setCommitMessage("PROJ-999 Fix critical null pointer");
+        assertEquals("[PROJ-99] PROJ-999 Fix critical null pointer", config.getFormattedCommitMessage());
+
+        // Prefix specified with brackets in config
+        config.setTaskPrefix("[PROJ-99]");
+        config.setCommitMessage("Fix critical null pointer");
+        assertEquals("[PROJ-99] Fix critical null pointer", config.getFormattedCommitMessage());
+
         config.setCommitMessage("[PROJ-99] Fix critical null pointer");
         assertEquals("[PROJ-99] Fix critical null pointer", config.getFormattedCommitMessage());
 
         // Disabled prefixing
         config.setPrefixMessageWithTask(false);
-        assertEquals("[PROJ-99] Fix critical null pointer", config.getFormattedCommitMessage());
-
         config.setCommitMessage("Direct message");
         assertEquals("Direct message", config.getFormattedCommitMessage());
     }
@@ -346,136 +381,56 @@ public class BranchSettingsTest {
     }
 
     @Test
-    public void testBranchMappingAllowMerge() {
-        BranchMapping bm1 = new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true);
-        assertTrue(bm1.isAllowMerge(), "Default constructor or 4-arg constructor should have allowMerge=true");
-
-        BranchMapping bm2 = new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true, false);
-        assertFalse(bm2.isAllowMerge());
-
-        bm2.setAllowMerge(true);
-        assertTrue(bm2.isAllowMerge());
-
-        // Copy
-        BranchMapping copy = bm2.copy();
-        assertEquals(bm2, copy);
-        assertEquals(bm2.hashCode(), copy.hashCode());
-
-        copy.setAllowMerge(false);
-        assertNotEquals(bm2, copy);
-        assertNotEquals(bm2.hashCode(), copy.hashCode());
-    }
-
-    @Test
-    public void testStateAndConfigGitLabMergeMr() {
+    public void testStateAndConfigCopyAndEquality() {
         MultiBranchSettings.State state = new MultiBranchSettings.State();
-        assertFalse(state.gitLabMergeMr);
-        for (BranchMapping mapping : state.branchMappings) {
-            assertTrue(mapping.isAllowMerge(), "Default mapping should have allowMerge enabled");
-        }
+        assertEquals(4, state.branchMappings.size());
 
-        state.gitLabMergeMr = true;
+        state.checkoutBranch = "deploy/prod";
         MultiBranchSettings.State stateCopy = state.copy();
         assertEquals(state, stateCopy);
         assertEquals(state.hashCode(), stateCopy.hashCode());
 
-        stateCopy.gitLabMergeMr = false;
+        stateCopy.checkoutBranch = "deploy/staging";
         assertNotEquals(state, stateCopy);
 
         // toConfig
         MultiBranchSettings settings = new MultiBranchSettings();
         settings.loadState(state);
         MultiBranchConfig config = MultiBranchConfig.fromSettings(settings);
-        assertTrue(config.isGitLabMergeMr());
-        for (BranchMapping m : config.getBranchMappings()) {
-            assertTrue(m.isAllowMerge());
-        }
+        assertEquals("deploy/prod", config.getCheckoutBranch());
+        assertEquals(4, config.getBranchMappings().size());
 
         // config copy
         MultiBranchConfig configCopy = config.copy();
-        assertTrue(configCopy.isGitLabMergeMr());
-        configCopy.setGitLabMergeMr(false);
-        assertFalse(configCopy.isGitLabMergeMr());
-        assertTrue(config.isGitLabMergeMr());
+        assertEquals(config.getCheckoutBranch(), configCopy.getCheckoutBranch());
+        configCopy.setCheckoutBranch("deploy/dev");
+        assertEquals("deploy/dev", configCopy.getCheckoutBranch());
+        assertEquals("deploy/prod", config.getCheckoutBranch());
     }
 
     @Test
-    public void testGitLabMergeMrResult() {
-        GitLabApiService.MergeMrResult success = GitLabApiService.MergeMrResult.success("Merged successfully", "789abc");
-        assertTrue(success.isSuccess());
-        assertEquals("Merged successfully", success.getMessage());
-        assertEquals("789abc", success.getMergeCommitSha());
-
-        GitLabApiService.MergeMrResult error = GitLabApiService.MergeMrResult.error("Conflict detected");
-        assertFalse(error.isSuccess());
-        assertEquals("Conflict detected", error.getMessage());
-        assertNull(error.getMergeCommitSha());
-    }
-
-    @Test
-    public void testResultItemMrMergeFields() {
+    public void testResultItemFields() {
         MultiBranchResultItem itemSuccess = new MultiBranchResultItem(
                 "TASK-101-dev", "deploy/dev", "abc1234", true, "Pushed to origin",
-                "https://gitlab.example.com/group/repo/-/merge_requests/42", null,
-                true, "Merged successfully (sha123)", false
+                "https://gitlab.example.com/group/repo/-/merge_requests/42", null
         );
         assertTrue(itemSuccess.isSuccess());
-        assertTrue(itemSuccess.isMrMerged());
-        assertFalse(itemSuccess.isMrMergeError());
-        assertEquals("Merged successfully (sha123)", itemSuccess.getMrMergeStatus());
+        assertFalse(itemSuccess.hasErrors());
+        assertEquals("TASK-101-dev", itemSuccess.getBranchName());
+        assertEquals("deploy/dev", itemSuccess.getTargetBranch());
+        assertEquals("abc1234", itemSuccess.getCommitHash());
+        assertTrue(itemSuccess.isPushed());
+        assertEquals("Pushed to origin", itemSuccess.getPushDetails());
+        assertEquals("https://gitlab.example.com/group/repo/-/merge_requests/42", itemSuccess.getMrUrl());
+        assertNull(itemSuccess.getErrorMessage());
 
         MultiBranchResultItem itemFailed = new MultiBranchResultItem(
-                "TASK-101-test", "deploy/test", "def5678", true, "Pushed to origin",
-                "https://gitlab.example.com/group/repo/-/merge_requests/43", null,
-                false, "Failed: HTTP 405 Branch cannot be merged", true
+                "TASK-101-test", "deploy/test", "def5678", false, "Push rejected",
+                "https://gitlab.example.com/group/repo/-/merge_requests/43", "Remote rejected push"
         );
-        assertTrue(itemFailed.isSuccess()); // commit/push succeeded
-        assertFalse(itemFailed.isMrMerged());
-        assertTrue(itemFailed.isMrMergeError());
-        assertEquals("Failed: HTTP 405 Branch cannot be merged", itemFailed.getMrMergeStatus());
-    }
-
-    @Test
-    public void testBrowserOpenLogicAfterMerge() {
-        // Case 1: Merge MR option is enabled, branch allows merge, merge succeeded without error -> DO NOT OPEN IN BROWSER
-        boolean openInBrowser1 = decideOpenInBrowser(true, true, true, false, true, "https://gitlab.com/mr/1");
-        assertFalse(openInBrowser1, "Successful merge without error should suppress opening in browser");
-
-        // Case 2: Merge MR option is enabled, branch allows merge, merge failed with error -> OPEN IN BROWSER
-        boolean openInBrowser2 = decideOpenInBrowser(true, true, false, true, true, "https://gitlab.com/mr/2");
-        assertTrue(openInBrowser2, "Merge failure should open MR in browser so user can review/resolve conflicts");
-
-        // Case 3: Merge MR option is enabled, but branch does NOT allow merge -> OPEN IN BROWSER (Merge MR not applied to this branch)
-        boolean openInBrowser3 = decideOpenInBrowser(true, false, false, false, true, "https://gitlab.com/mr/3");
-        assertTrue(openInBrowser3, "Branch with Allow merge unchecked should follow standard browser open behavior");
-
-        // Case 4: Merge MR option is disabled -> OPEN IN BROWSER
-        boolean openInBrowser4 = decideOpenInBrowser(false, true, false, false, true, "https://gitlab.com/mr/4");
-        assertTrue(openInBrowser4, "When Merge MR is disabled, standard browser open behavior applies");
-
-        // Case 5: Open MR in browser setting is disabled -> DO NOT OPEN
-        boolean openInBrowser5 = decideOpenInBrowser(true, true, false, true, false, "https://gitlab.com/mr/5");
-        assertFalse(openInBrowser5, "When open in browser setting is off, do not open");
-    }
-
-    private boolean decideOpenInBrowser(boolean isGitLabMergeMr, boolean isAllowMerge, boolean mrMerged, boolean mrMergeError, boolean isOpenMrLinksInBrowser, String mrUrl) {
-        if (!isOpenMrLinksInBrowser || mrUrl == null || mrUrl.isBlank()) {
-            return false;
-        }
-        if (isGitLabMergeMr) {
-            if (isAllowMerge) {
-                if (mrMergeError) {
-                    return true;
-                } else if (mrMerged) {
-                    return false;
-                } else {
-                    return true;
-                }
-            } else {
-                return true;
-            }
-        }
-        return true;
+        assertFalse(itemFailed.isSuccess());
+        assertTrue(itemFailed.hasErrors());
+        assertEquals("Remote rejected push", itemFailed.getErrorMessage());
     }
 
     @Test
@@ -560,5 +515,142 @@ public class BranchSettingsTest {
         // Repo dir detection
         String detectedFromRepo = GitLabTokenManager.detectHost(new java.io.File("."), null);
         assertNotNull(detectedFromRepo);
+    }
+
+    @Test
+    public void testGitLabMrWebUrlExtractionVsAuthorUrl() {
+        // Real-world GitLab API response for Merge Request where author has web_url before the MR web_url
+        String gitLabMrResponse = "{\n" +
+                "  \"id\": 9876,\n" +
+                "  \"iid\": 42,\n" +
+                "  \"project_id\": 10,\n" +
+                "  \"title\": \"[TASK-101] Feature commit\",\n" +
+                "  \"description\": \"Auto-created by Multi-Branch Plugin\",\n" +
+                "  \"state\": \"opened\",\n" +
+                "  \"author\": {\n" +
+                "    \"id\": 5,\n" +
+                "    \"username\": \"altuzh\",\n" +
+                "    \"name\": \"Alex\",\n" +
+                "    \"state\": \"active\",\n" +
+                "    \"web_url\": \"https://gitlab.bft.local/altuzh\"\n" +
+                "  },\n" +
+                "  \"assignees\": [\n" +
+                "    {\n" +
+                "      \"id\": 5,\n" +
+                "      \"username\": \"altuzh\",\n" +
+                "      \"web_url\": \"https://gitlab.bft.local/altuzh\"\n" +
+                "    }\n" +
+                "  ],\n" +
+                "  \"source_branch\": \"TASK-101-dev\",\n" +
+                "  \"target_branch\": \"deploy/dev\",\n" +
+                "  \"web_url\": \"https://gitlab.bft.local/group/project/-/merge_requests/42\",\n" +
+                "  \"merge_status\": \"can_be_merged\"\n" +
+                "}";
+
+        // extractMrWebUrl must extract the MR web_url, NOT the author's user profile URL!
+        String mrUrl = GitLabApiService.extractMrWebUrl(gitLabMrResponse);
+        assertNotNull(mrUrl);
+        assertEquals("https://gitlab.bft.local/group/project/-/merge_requests/42", mrUrl);
+        assertNotEquals("https://gitlab.bft.local/altuzh", mrUrl);
+
+        // Top level extraction should also get the MR web_url
+        String topLevelUrl = GitLabApiService.extractTopLevelString(gitLabMrResponse, "web_url");
+        assertEquals("https://gitlab.bft.local/group/project/-/merge_requests/42", topLevelUrl);
+
+        // Top level iid extraction should get 42
+        int topLevelIid = GitLabApiService.extractTopLevelInt(gitLabMrResponse, "iid");
+        assertEquals(42, topLevelIid);
+    }
+
+    @Test
+    public void testGitLabMrListResponseUrlExtraction() {
+        // When checking existing MR, response is an array of objects
+        String listResponse = "[\n" +
+                "  {\n" +
+                "    \"id\": 9876,\n" +
+                "    \"iid\": 15,\n" +
+                "    \"author\": {\n" +
+                "      \"web_url\": \"https://gitlab.corp.local/someuser\"\n" +
+                "    },\n" +
+                "    \"web_url\": \"https://gitlab.corp.local/team/repo/-/merge_requests/15\"\n" +
+                "  }\n" +
+                "]";
+
+        String mrUrl = GitLabApiService.extractMrWebUrl(listResponse);
+        assertEquals("https://gitlab.corp.local/team/repo/-/merge_requests/15", mrUrl);
+
+        int iid = GitLabApiService.extractTopLevelInt(listResponse, "iid");
+        assertEquals(15, iid);
+    }
+
+    @Test
+    public void testGitLabConflict409IidExtraction() {
+        String conflictBody = "{\"message\":[\"Another open merge request already exists for this source branch: !88\"]}";
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("!(\\d+)").matcher(conflictBody);
+        assertTrue(m.find());
+        assertEquals(88, Integer.parseInt(m.group(1)));
+
+        GitLabApiService.GitLabProjectInfo info = GitLabApiService.parseProjectInfo("git@gitlab.bft.local:group/proj.git", null);
+        assertNotNull(info);
+        assertEquals("https://gitlab.bft.local/group/proj/-/merge_requests/88", info.getWebProjectUrl() + "/-/merge_requests/88");
+    }
+
+    @Test
+    public void testResultItemFailureStates() {
+        // Success case
+        MultiBranchResultItem itemOk = new MultiBranchResultItem("TASK-1-dev", "deploy/dev", "sha123", true, "Pushed to origin", "https://mr/1", null);
+        assertTrue(itemOk.isSuccess());
+        assertFalse(itemOk.hasErrors());
+
+        // Error message present -> failure
+        MultiBranchResultItem itemErr = new MultiBranchResultItem("TASK-1-test", "deploy/test", null, false, "Not pushed", null, "Failed to apply changes: conflict");
+        assertFalse(itemErr.isSuccess());
+        assertTrue(itemErr.hasErrors());
+        assertEquals("Failed to apply changes: conflict", itemErr.getErrorMessage());
+
+        // Push failed details -> failure
+        MultiBranchResultItem itemPushFail = new MultiBranchResultItem("TASK-1-prod", "deploy/prod", "sha456", false, "Push failed: remote rejected", null, null);
+        assertFalse(itemPushFail.isSuccess());
+        assertTrue(itemPushFail.hasErrors());
+    }
+
+    @Test
+    public void testSettingsStateLastTaskPrefix() {
+        MultiBranchSettings.State state = new MultiBranchSettings.State();
+        assertEquals("", state.lastTaskPrefix);
+
+        state.lastTaskPrefix = "FEATURE-42";
+        MultiBranchSettings.State copy = state.copy();
+        assertEquals("FEATURE-42", copy.lastTaskPrefix);
+        assertEquals(state, copy);
+        assertEquals(state.hashCode(), copy.hashCode());
+
+        MultiBranchSettings settings = new MultiBranchSettings(null);
+        settings.loadState(state);
+        MultiBranchConfig config = settings.toConfig(null);
+        assertEquals("FEATURE-42", config.getTaskPrefix());
+    }
+
+    @Test
+    public void testSyncDocumentsToDiskDoesNotCrash() {
+        // Calling with null project should safely no-op without NPE
+        MultiBranchService.syncDocumentsToDisk(null);
+    }
+
+    @Test
+    public void testVersionComparison() {
+        assertTrue(MultiBranchReloadAction.compareVersions("1.1.4", "1.1.3") > 0);
+        assertTrue(MultiBranchReloadAction.compareVersions("1.2.0", "1.1.9") > 0);
+        assertTrue(MultiBranchReloadAction.compareVersions("2.0.0", "1.9.9") > 0);
+        assertEquals(0, MultiBranchReloadAction.compareVersions("1.1.3", "1.1.3"));
+        assertTrue(MultiBranchReloadAction.compareVersions("1.1.2", "1.1.3") < 0);
+        assertTrue(MultiBranchReloadAction.compareVersions("1.1.3-beta", "1.1.3") == 0);
+    }
+
+    @Test
+    public void testGetVersionFromZip() {
+        assertEquals("1.1.3", MultiBranchReloadAction.getVersionFromZip(new File("git-multibranch-plugin-1.1.3.zip")));
+        assertEquals("1.2.0", MultiBranchReloadAction.getVersionFromZip(new File("/path/to/git-multibranch-plugin-1.2.0.zip")));
+        assertNull(MultiBranchReloadAction.getVersionFromZip(new File("unknown-file.zip")));
     }
 }

@@ -19,7 +19,7 @@ public class MultiBranchResultDialog extends DialogWrapper {
     public MultiBranchResultDialog(@Nullable Project project, List<MultiBranchResultItem> results) {
         super(project, true);
         this.results = results != null ? results : List.of();
-        setTitle("Multi-Branch Review & Execution Summary");
+        setTitle("Multi-Branch Review & Execution Summary (v" + MultiBranchReloadAction.getRunningVersion() + ")");
         setOKButtonText("Close");
         init();
     }
@@ -33,8 +33,7 @@ public class MultiBranchResultDialog extends DialogWrapper {
         long successCount = results.stream().filter(MultiBranchResultItem::isSuccess).count();
         long pushedCount = results.stream().filter(MultiBranchResultItem::isPushed).count();
         long mrCount = results.stream().filter(r -> r.getMrUrl() != null && !r.getMrUrl().isBlank()).count();
-        long mergedCount = results.stream().filter(MultiBranchResultItem::isMrMerged).count();
-        long mergeErrorsCount = results.stream().filter(MultiBranchResultItem::isMrMergeError).count();
+        long failedCount = results.size() - successCount;
 
         JPanel topBanner = new JPanel(new BorderLayout(JBUI.scale(8), JBUI.scale(4)));
         topBanner.setBorder(BorderFactory.createCompoundBorder(
@@ -42,12 +41,19 @@ public class MultiBranchResultDialog extends DialogWrapper {
                 JBUI.Borders.empty(4, 4, 8, 4)
         ));
 
-        JLabel titleLbl = new JLabel("Workflow Execution Review (" + successCount + "/" + results.size() + " branches succeeded)");
+        StringBuilder titleText = new StringBuilder();
+        titleText.append("Workflow Execution Review (").append(successCount).append("/").append(results.size()).append(" branches succeeded");
+        if (failedCount > 0) {
+            titleText.append(", ").append(failedCount).append(" failed");
+        }
+        titleText.append(")");
+
+        JLabel titleLbl = new JLabel(titleText.toString());
         titleLbl.setFont(titleLbl.getFont().deriveFont(Font.BOLD, JBUI.scaleFontSize(14)));
-        if (successCount == results.size()) {
+        if (failedCount == 0 && successCount == results.size()) {
             titleLbl.setForeground(new Color(0x2E7D32));
         } else {
-            titleLbl.setForeground(JBUI.CurrentTheme.NotificationWarning.foregroundColor());
+            titleLbl.setForeground(JBUI.CurrentTheme.NotificationError.foregroundColor());
         }
         topBanner.add(titleLbl, BorderLayout.NORTH);
 
@@ -56,11 +62,8 @@ public class MultiBranchResultDialog extends DialogWrapper {
         if (mrCount > 0) {
             stats.append("  |  MRs Created: ").append(mrCount);
         }
-        if (mergedCount > 0) {
-            stats.append("  |  Auto-Merged: ").append(mergedCount);
-        }
-        if (mergeErrorsCount > 0) {
-            stats.append("  |  Merge Errors: ").append(mergeErrorsCount);
+        if (failedCount > 0) {
+            stats.append("  |  Failed Branches: ").append(failedCount);
         }
         JLabel statsLbl = new JLabel(stats.toString());
         statsLbl.setForeground(JBUI.CurrentTheme.Label.foreground());
@@ -77,11 +80,17 @@ public class MultiBranchResultDialog extends DialogWrapper {
                     JBUI.Borders.empty(8)
             ));
 
-            String statusIcon = item.isSuccess() ? "✓ " : "✗ ";
-            String titleText = statusIcon + item.getBranchName() + "  ➔  " + item.getTargetBranch();
-            JLabel titleLabel = new JLabel(titleText);
+            boolean isFailed = !item.isSuccess();
+
+            String statusIcon = isFailed ? "✗ " : "✓ ";
+            String cardTitle = statusIcon + item.getBranchName() + "  ➔  " + item.getTargetBranch();
+            if (isFailed) {
+                cardTitle += "  [FAILED]";
+            }
+
+            JLabel titleLabel = new JLabel(cardTitle);
             titleLabel.setFont(titleLabel.getFont().deriveFont(Font.BOLD));
-            if (!item.isSuccess()) {
+            if (isFailed) {
                 titleLabel.setForeground(JBUI.CurrentTheme.NotificationError.foregroundColor());
             }
 
@@ -121,26 +130,42 @@ public class MultiBranchResultDialog extends DialogWrapper {
                     mrRow.add(btnRow, BorderLayout.EAST);
                     detailsPanel.add(mrRow);
                 }
-
-                // MR Merge Status row
-                if (item.getMrMergeStatus() != null && !item.getMrMergeStatus().isBlank()) {
-                    JLabel mergeLbl = new JLabel();
-                    if (item.isMrMerged()) {
-                        mergeLbl.setText("✓ Auto-merge: " + item.getMrMergeStatus());
-                        mergeLbl.setFont(mergeLbl.getFont().deriveFont(Font.BOLD));
-                        mergeLbl.setForeground(new Color(0x2E7D32));
-                    } else if (item.isMrMergeError()) {
-                        mergeLbl.setText("✗ Auto-merge: " + item.getMrMergeStatus());
-                        mergeLbl.setFont(mergeLbl.getFont().deriveFont(Font.BOLD));
-                        mergeLbl.setForeground(JBUI.CurrentTheme.NotificationError.foregroundColor());
-                    } else {
-                        mergeLbl.setText("● Auto-merge: " + item.getMrMergeStatus());
-                        mergeLbl.setForeground(JBUI.CurrentTheme.Label.disabledForeground());
-                    }
-                    detailsPanel.add(mergeLbl);
-                }
             } else {
-                detailsPanel.add(new JBLabel("Error: " + item.getErrorMessage()));
+                if (item.getCommitHash() != null && !item.getCommitHash().isBlank()) {
+                    detailsPanel.add(new JBLabel("Commit: " + item.getCommitHash()));
+                }
+                if (item.getPushDetails() != null && !item.getPushDetails().equals("Local only")) {
+                    JLabel pushLbl = new JBLabel("Push: " + item.getPushDetails());
+                    pushLbl.setForeground(JBUI.CurrentTheme.NotificationError.foregroundColor());
+                    detailsPanel.add(pushLbl);
+                }
+                String err = item.getErrorMessage();
+                if (err != null && !err.isBlank()) {
+                    JPanel errBox = new JPanel(new BorderLayout(0, JBUI.scale(2)));
+                    errBox.setBorder(BorderFactory.createCompoundBorder(
+                            BorderFactory.createLineBorder(JBUI.CurrentTheme.NotificationError.borderColor(), 1),
+                            JBUI.Borders.empty(6, 8)
+                    ));
+                    errBox.setBackground(JBUI.CurrentTheme.NotificationError.backgroundColor());
+
+                    JLabel errTitle = new JLabel("Problem Details:");
+                    errTitle.setFont(errTitle.getFont().deriveFont(Font.BOLD));
+                    errTitle.setForeground(JBUI.CurrentTheme.NotificationError.foregroundColor());
+                    errBox.add(errTitle, BorderLayout.NORTH);
+
+                    JTextArea errText = new JTextArea(err);
+                    errText.setEditable(false);
+                    errText.setLineWrap(true);
+                    errText.setWrapStyleWord(true);
+                    errText.setBackground(JBUI.CurrentTheme.NotificationError.backgroundColor());
+                    errText.setForeground(JBUI.CurrentTheme.NotificationError.foregroundColor());
+                    errText.setBorder(JBUI.Borders.empty(2));
+                    errBox.add(errText, BorderLayout.CENTER);
+
+                    detailsPanel.add(errBox);
+                } else {
+                    detailsPanel.add(new JBLabel("Operation failed."));
+                }
             }
 
             card.add(titleLabel, BorderLayout.NORTH);

@@ -8,19 +8,12 @@ public class MultiBranchResultItem {
     private final String pushDetails;
     private final String mrUrl;
     private final String errorMessage;
-    private final boolean mrMerged;
-    private final String mrMergeStatus;
-    private final boolean mrMergeError;
 
     public MultiBranchResultItem(String branchName, String targetBranch, String commitHash, boolean pushed, String mrUrl, String errorMessage) {
-        this(branchName, targetBranch, commitHash, pushed, null, mrUrl, errorMessage, false, null, false);
+        this(branchName, targetBranch, commitHash, pushed, null, mrUrl, errorMessage);
     }
 
     public MultiBranchResultItem(String branchName, String targetBranch, String commitHash, boolean pushed, String pushDetails, String mrUrl, String errorMessage) {
-        this(branchName, targetBranch, commitHash, pushed, pushDetails, mrUrl, errorMessage, false, null, false);
-    }
-
-    public MultiBranchResultItem(String branchName, String targetBranch, String commitHash, boolean pushed, String pushDetails, String mrUrl, String errorMessage, boolean mrMerged, String mrMergeStatus, boolean mrMergeError) {
         this.branchName = branchName;
         this.targetBranch = targetBranch;
         this.commitHash = commitHash;
@@ -28,9 +21,6 @@ public class MultiBranchResultItem {
         this.pushDetails = pushDetails;
         this.mrUrl = mrUrl;
         this.errorMessage = errorMessage;
-        this.mrMerged = mrMerged;
-        this.mrMergeStatus = mrMergeStatus;
-        this.mrMergeError = mrMergeError;
     }
 
     public String getBranchName() { return branchName; }
@@ -45,8 +35,20 @@ public class MultiBranchResultItem {
     }
     public String getMrUrl() { return mrUrl; }
     public String getErrorMessage() { return errorMessage; }
-    public boolean isSuccess() { return errorMessage == null || errorMessage.isEmpty(); }
-    public boolean isMrMerged() { return mrMerged; }
-    public String getMrMergeStatus() { return mrMergeStatus; }
-    public boolean isMrMergeError() { return mrMergeError; }
+    public boolean isSuccess() {
+        if (errorMessage != null && !errorMessage.isBlank()) {
+            return false;
+        }
+        if (pushDetails != null) {
+            String pd = pushDetails.toLowerCase();
+            if (pd.contains("failed") || pd.contains("rejected")) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    public boolean hasErrors() {
+        return !isSuccess();
+    }
 }

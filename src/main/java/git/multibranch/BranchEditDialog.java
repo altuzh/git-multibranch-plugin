@@ -20,21 +20,20 @@ public class BranchEditDialog extends DialogWrapper {
     private JBTextField targetBranchField;
     private JBTextField suffixField;
     private JBCheckBox enabledCheckbox;
-    private JBCheckBox allowMergeCheckbox;
     private JLabel previewLabel;
     private BranchMapping result;
 
     public BranchEditDialog(@Nullable Component parent, @Nullable BranchMapping initial) {
         super(parent, true);
         this.initial = initial;
-        setTitle(initial == null ? "Add Target Branch Mapping" : "Edit Target Branch Mapping");
+        setTitle((initial == null ? "Add Target Branch Mapping" : "Edit Target Branch Mapping") + " (v" + MultiBranchReloadAction.getRunningVersion() + ")");
         init();
     }
 
     public BranchEditDialog(@Nullable Project project, @Nullable BranchMapping initial) {
         super(project, true);
         this.initial = initial;
-        setTitle(initial == null ? "Add Target Branch Mapping" : "Edit Target Branch Mapping");
+        setTitle((initial == null ? "Add Target Branch Mapping" : "Edit Target Branch Mapping") + " (v" + MultiBranchReloadAction.getRunningVersion() + ")");
         init();
     }
 
@@ -81,13 +80,11 @@ public class BranchEditDialog extends DialogWrapper {
         suffixPanel.add(suffixField, BorderLayout.CENTER);
         panel.add(suffixPanel, gbc);
 
-        // 4. Enabled and Allow Merge checkboxes
+        // 4. Enabled checkbox
         gbc.gridy++;
         JPanel checkRow = new JPanel(new FlowLayout(FlowLayout.LEFT, JBUI.scale(12), 0));
         enabledCheckbox = new JBCheckBox("Enabled by default", initial == null || initial.isEnabled());
-        allowMergeCheckbox = new JBCheckBox("Allow merge (apply Merge MR if enabled)", initial == null || initial.isAllowMerge());
         checkRow.add(enabledCheckbox);
-        checkRow.add(allowMergeCheckbox);
         panel.add(checkRow, gbc);
 
         // 5. Preview Label
@@ -149,8 +146,7 @@ public class BranchEditDialog extends DialogWrapper {
                 sourceBranchField.getText().trim(),
                 targetBranchField.getText().trim(),
                 suffixField.getText().trim(),
-                enabledCheckbox.isSelected(),
-                allowMergeCheckbox.isSelected()
+                enabledCheckbox.isSelected()
         );
         super.doOKAction();
     }

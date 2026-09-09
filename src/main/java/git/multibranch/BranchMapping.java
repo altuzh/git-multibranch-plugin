@@ -7,25 +7,19 @@ public class BranchMapping {
     private String targetOriginBranchName;
     private String branchSuffix;
     private boolean enabled;
-    private boolean allowMerge;
 
     /**
      * Default constructor required for IntelliJ PersistentStateComponent XML serialization.
      */
     public BranchMapping() {
-        this("", "", "", true, true);
+        this("", "", "", true);
     }
 
     public BranchMapping(String sourceOriginBranch, String targetOriginBranchName, String branchSuffix, boolean enabled) {
-        this(sourceOriginBranch, targetOriginBranchName, branchSuffix, enabled, true);
-    }
-
-    public BranchMapping(String sourceOriginBranch, String targetOriginBranchName, String branchSuffix, boolean enabled, boolean allowMerge) {
         this.sourceOriginBranch = sourceOriginBranch;
         this.targetOriginBranchName = targetOriginBranchName;
         this.branchSuffix = branchSuffix;
         this.enabled = enabled;
-        this.allowMerge = allowMerge;
     }
 
     public BranchMapping(BranchMapping other) {
@@ -33,7 +27,6 @@ public class BranchMapping {
         this.targetOriginBranchName = other.targetOriginBranchName;
         this.branchSuffix = other.branchSuffix;
         this.enabled = other.enabled;
-        this.allowMerge = other.allowMerge;
     }
 
     public String getSourceOriginBranch() {
@@ -68,14 +61,6 @@ public class BranchMapping {
         this.enabled = enabled;
     }
 
-    public boolean isAllowMerge() {
-        return allowMerge;
-    }
-
-    public void setAllowMerge(boolean allowMerge) {
-        this.allowMerge = allowMerge;
-    }
-
     public String getLocalBranchName(String prefix) {
         String p = prefix != null ? prefix.trim() : "";
         String s = branchSuffix != null ? branchSuffix.trim() : "";
@@ -92,7 +77,6 @@ public class BranchMapping {
         if (o == null || getClass() != o.getClass()) return false;
         BranchMapping that = (BranchMapping) o;
         return enabled == that.enabled &&
-                allowMerge == that.allowMerge &&
                 Objects.equals(sourceOriginBranch, that.sourceOriginBranch) &&
                 Objects.equals(targetOriginBranchName, that.targetOriginBranchName) &&
                 Objects.equals(branchSuffix, that.branchSuffix);
@@ -100,6 +84,6 @@ public class BranchMapping {
 
     @Override
     public int hashCode() {
-        return Objects.hash(sourceOriginBranch, targetOriginBranchName, branchSuffix, enabled, allowMerge);
+        return Objects.hash(sourceOriginBranch, targetOriginBranchName, branchSuffix, enabled);
     }
 }

@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'git.multibranch'
-version = '1.1.2'
+version = '1.1.5'
 
 java {
     sourceCompatibility = JavaVersion.VERSION_21
@@ -51,6 +51,104 @@ tasks.register('buildPlugin', Zip) {
     into('git-multibranch-plugin/lib') {
         from jar.archiveFile
     }
+}
+
+tasks.register('installToRunningIde') {
+    dependsOn buildPlugin
+    onlyIf {
+        // Run locally only (skip in CI pipelines like GitHub Actions)
+        System.getenv('CI') == null && System.getenv('GITHUB_ACTIONS') == null
+    }
+    doLast {
+        def appData = System.getenv('APPDATA')
+        if (!appData) {
+            println "[Local Install] APPDATA environment variable not found, skipping IDE plugin installation."
+            return
+        }
+
+        def jbDir = new File(appData, 'JetBrains')
+        if (!jbDir.exists()) {
+            println "[Local Install] JetBrains directory not found in APPDATA (${jbDir}), skipping."
+            return
+        }
+
+        // Detect running JetBrains processes
+        def runningProcesses = []
+        try {
+            ProcessHandle.allProcesses().each { ph ->
+                def cmd = ph.info().command().orElse('').toLowerCase()
+                if (cmd.contains('idea64') || cmd.contains('idea.exe') || cmd.contains('webstorm')) {
+                    def name = cmd.substring(Math.max(0, Math.max(cmd.lastIndexOf('/'), cmd.lastIndexOf('\\')) + 1))
+                    runningProcesses.add(name)
+                }
+            }
+        } catch (Exception ignored) {}
+
+        if (!runningProcesses.isEmpty()) {
+            println "[Local Install] Detected running IDE: ${runningProcesses.unique().join(', ')}"
+        } else {
+            println "[Local Install] No running IDE detected; installing to installed JetBrains IDE directories."
+        }
+
+        def jarFile = jar.archiveFile.get().asFile
+        int installedCount = 0
+
+        jbDir.listFiles().each { ideDir ->
+            if (ideDir.isDirectory() && (ideDir.name.contains('Idea') || ideDir.name.contains('WebStorm') || ideDir.name.contains('PyCharm'))) {
+                def pluginLib = new File(ideDir, "plugins/git-multibranch-plugin/lib")
+                if (pluginLib.exists() || new File(ideDir, "plugins").exists()) {
+                    if (!pluginLib.exists()) {
+                        pluginLib.mkdirs()
+                    }
+                    def destFile = new File(pluginLib, "git-multibranch-plugin-${project.version}.jar")
+                    try {
+                        java.nio.file.Files.copy(jarFile.toPath(), destFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                        println "[Local Install] Installed to: ${ideDir.name} (${destFile.name})"
+                        installedCount++
+                    } catch (Exception ex) {
+                        // Direct copy locked by running JVM (mapped memory section), rename then copy
+                        def oldFile = new File(pluginLib, "git-multibranch-plugin-${project.version}.jar.old")
+                        if (oldFile.exists()) {
+                            oldFile.delete()
+                        }
+                        if (destFile.renameTo(oldFile)) {
+                            java.nio.file.Files.copy(jarFile.toPath(), destFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                            println "[Local Install] Installed to running ${ideDir.name} via atomic rename (${destFile.name})"
+                            installedCount++
+                        } else {
+                            println "[Local Install] Warning: Failed to replace file in ${ideDir.name}: ${ex.message}"
+                        }
+                    }
+
+                    // Retire any other jar versions in the lib directory
+                    pluginLib.listFiles().each { f ->
+                        if (f.name.endsWith('.jar') && f.name != destFile.name) {
+                            def retired = new File(pluginLib, f.name + ".old")
+                            if (retired.exists()) retired.delete()
+                            if (!f.renameTo(retired)) {
+                                try { f.delete() } catch (Exception ignored) {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        println "[Local Install] Successfully installed plugin to ${installedCount} IDE directory(ies)."
+        println "  -> Dynamic hot-reload: Tools -> Multi-Branch: Reload Plugin from Disk (or restart IDEA)"
+    }
+}
+
+tasks.named('buildPlugin') {
+    finalizedBy('installToRunningIde')
+}
+
+tasks.named('assemble') {
+    dependsOn('buildPlugin')
+}
+
+tasks.register('deploy') {
+    dependsOn installToRunningIde
 }
 
 tasks.withType(JavaCompile).configureEach {

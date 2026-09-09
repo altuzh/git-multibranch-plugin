@@ -41,7 +41,6 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
     private JBCheckBox gitLabAssignToMeCheckbox;
     private JBCheckBox gitLabDeleteSourceBranchCheckbox;
     private JBCheckBox gitLabSquashCommitsCheckbox;
-    private JBCheckBox gitLabMergeMrCheckbox;
     private JBTextField gitLabHostField;
     private String currentLoadedHost = "";
 
@@ -105,16 +104,14 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         gitLabPanel.add(testStatusLabel, glGbc);
 
         glGbc.gridy++;
-        JPanel glOptionsPanel = new JPanel(new GridLayout(4, 1, 0, JBUI.scale(2)));
+        JPanel glOptionsPanel = new JPanel(new GridLayout(3, 1, 0, JBUI.scale(2)));
         gitLabAssignToMeCheckbox = new JBCheckBox("Assign Merge Request to authenticated user (login person)");
         gitLabDeleteSourceBranchCheckbox = new JBCheckBox("Delete source branch when merge request is accepted");
         gitLabSquashCommitsCheckbox = new JBCheckBox("Squash commits when merge request is accepted");
-        gitLabMergeMrCheckbox = new JBCheckBox("Merge MR automatically after creation via GitLab API (Merge MR)");
 
         glOptionsPanel.add(gitLabAssignToMeCheckbox);
         glOptionsPanel.add(gitLabDeleteSourceBranchCheckbox);
         glOptionsPanel.add(gitLabSquashCommitsCheckbox);
-        glOptionsPanel.add(gitLabMergeMrCheckbox);
         gitLabPanel.add(glOptionsPanel, glGbc);
 
         glGbc.gridy++;
@@ -143,7 +140,6 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
             gitLabAssignToMeCheckbox.setEnabled(enabled);
             gitLabDeleteSourceBranchCheckbox.setEnabled(enabled);
             gitLabSquashCommitsCheckbox.setEnabled(enabled);
-            gitLabMergeMrCheckbox.setEnabled(enabled);
             gitLabHostField.setEnabled(enabled);
         });
 
@@ -199,6 +195,7 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         optionsPanel.add(checkPanel, gbc);
 
         bottomContainer.add(optionsPanel);
+
         rootPanel.add(bottomContainer, BorderLayout.SOUTH);
 
         return rootPanel;
@@ -322,7 +319,6 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         if (gitLabAssignToMeCheckbox.isSelected() != state.gitLabAssignToMe) return true;
         if (gitLabDeleteSourceBranchCheckbox.isSelected() != state.gitLabDeleteSourceBranch) return true;
         if (gitLabSquashCommitsCheckbox.isSelected() != state.gitLabSquashCommits) return true;
-        if (gitLabMergeMrCheckbox.isSelected() != state.gitLabMergeMr) return true;
         if (!Objects.equals(gitLabHostField.getText().trim(), state.gitLabHost != null ? state.gitLabHost : "")) return true;
 
         String curToken = new String(gitLabTokenField.getPassword()).trim();
@@ -364,7 +360,6 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
             state.gitLabAssignToMe = gitLabAssignToMeCheckbox.isSelected();
             state.gitLabDeleteSourceBranch = gitLabDeleteSourceBranchCheckbox.isSelected();
             state.gitLabSquashCommits = gitLabSquashCommitsCheckbox.isSelected();
-            state.gitLabMergeMr = gitLabMergeMrCheckbox.isSelected();
             state.gitLabHost = gitLabHostField.getText().trim();
 
             String effectiveHost = GitLabTokenManager.detectHost(project, state.gitLabHost);
@@ -395,7 +390,6 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         gitLabAssignToMeCheckbox.setSelected(state.gitLabAssignToMe);
         gitLabDeleteSourceBranchCheckbox.setSelected(state.gitLabDeleteSourceBranch);
         gitLabSquashCommitsCheckbox.setSelected(state.gitLabSquashCommits);
-        gitLabMergeMrCheckbox.setSelected(state.gitLabMergeMr);
         gitLabHostField.setText(state.gitLabHost != null ? state.gitLabHost : "");
 
         updateHostUI(true);
@@ -415,7 +409,6 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         gitLabAssignToMeCheckbox.setEnabled(glEnabled);
         gitLabDeleteSourceBranchCheckbox.setEnabled(glEnabled);
         gitLabSquashCommitsCheckbox.setEnabled(glEnabled);
-        gitLabMergeMrCheckbox.setEnabled(glEnabled);
         gitLabHostField.setEnabled(glEnabled);
     }
 
@@ -440,7 +433,6 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         gitLabAssignToMeCheckbox = null;
         gitLabDeleteSourceBranchCheckbox = null;
         gitLabSquashCommitsCheckbox = null;
-        gitLabMergeMrCheckbox = null;
         gitLabHostField = null;
     }
 }

@@ -21,7 +21,7 @@ public class MultiBranchConfirmDialog extends DialogWrapper {
         super(project, true);
         this.repository = repository;
         this.config = config;
-        setTitle("Confirm Multi-Branch Execution");
+        setTitle("Confirm Multi-Branch Execution (v" + MultiBranchReloadAction.getRunningVersion() + ")");
         setOKButtonText("Confirm & Execute");
         setCancelButtonText("Cancel");
         init();
@@ -126,18 +126,6 @@ public class MultiBranchConfirmDialog extends DialogWrapper {
 
             if (config.isGenerateMrLinks()) {
                 stepsPanel.add(new JLabel("4. Create GitLab Merge Request: " + localBranch + " ➔ " + mapping.getTargetOriginBranchName()));
-            }
-
-            if (config.isGitLabMergeMr()) {
-                if (mapping.isAllowMerge()) {
-                    JLabel mergeStep = new JLabel("5. Auto-merge Merge Request into " + mapping.getTargetOriginBranchName() + " via GitLab API (Allow merge: Enabled)");
-                    mergeStep.setForeground(new Color(0x2E7D32));
-                    stepsPanel.add(mergeStep);
-                } else {
-                    JLabel mergeStep = new JLabel("5. Skip auto-merge: 'Allow merge' checkbox is NOT selected for this branch");
-                    mergeStep.setForeground(JBUI.CurrentTheme.Label.disabledForeground());
-                    stepsPanel.add(mergeStep);
-                }
             }
 
             card.add(stepsPanel, BorderLayout.CENTER);

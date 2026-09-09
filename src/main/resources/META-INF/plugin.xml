@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>git.multibranch</id>
     <name>Multi-Branch Commit &amp; Push</name>
-    <version>1.1.2</version>
+    <version>1.1.5</version>
     <vendor email="altuzh@users.noreply.github.com" url="https://github.com/altuzh/git-multibranch-plugin">Alexey Tuzhikov</vendor>
 
     <description><![CDATA[
@@ -12,6 +12,7 @@
         <li>Commits changes across all 4 branches safely without disrupting the working tree</li>
         <li>Pushes branches to origin with upstream tracking</li>
         <li>Generates clickable GitLab Merge Request or GitHub Pull Request creation links with target branches pre-selected</li>
+        <li>Supports dynamic hot-reloading without IDE restart</li>
     </ul>
     ]]></description>
 
@@ -42,6 +43,13 @@
             <add-to-group group-id="GitRepositoryActions" anchor="first"/>
             <add-to-group group-id="Git.ContextMenu" anchor="first"/>
             <keyboard-shortcut keymap="$default" first-keystroke="control alt M"/>
+        </action>
+        <action id="git.multibranch.MultiBranchReloadAction"
+                class="git.multibranch.MultiBranchReloadAction"
+                text="Multi-Branch: Reload Plugin from Disk"
+                description="Dynamically reloads the Multi-Branch plugin from the latest build distribution without restarting IDEA">
+            <add-to-group group-id="Git.MainMenu" anchor="after" relative-to-action="git.multibranch.MultiBranchCommitAction"/>
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
         </action>
     </actions>
 </idea-plugin>

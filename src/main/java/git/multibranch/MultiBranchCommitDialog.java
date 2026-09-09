@@ -45,14 +45,12 @@ public class MultiBranchCommitDialog extends DialogWrapper {
 
     private JPanel branchesRowsPanel;
     private final List<JCheckBox> mappingCheckboxes = new ArrayList<>();
-    private final List<JCheckBox> allowMergeCheckboxes = new ArrayList<>();
     private final List<JLabel> previewLabels = new ArrayList<>();
 
     private JBCheckBox fetchCheckbox;
     private JBCheckBox pushCheckbox;
     private JBCheckBox mrLinksCheckbox;
     private JBCheckBox openMrCheckbox;
-    private JBCheckBox mergeMrCheckbox;
     private JBCheckBox stashCheckbox;
     private JBCheckBox checkoutTestCheckbox;
 
@@ -67,8 +65,13 @@ public class MultiBranchCommitDialog extends DialogWrapper {
         this.detection = detection;
         if (defaultPrefix != null && !defaultPrefix.isBlank()) {
             config.setTaskPrefix(defaultPrefix);
+        } else if ((config.getTaskPrefix() == null || config.getTaskPrefix().isBlank()) && project != null) {
+            MultiBranchSettings settings = MultiBranchSettings.getInstance(project);
+            if (settings != null && settings.getState().lastTaskPrefix != null && !settings.getState().lastTaskPrefix.isBlank()) {
+                config.setTaskPrefix(settings.getState().lastTaskPrefix);
+            }
         }
-        setTitle("Multi-Branch Commit & Push");
+        setTitle("Multi-Branch Commit & Push (v" + MultiBranchReloadAction.getRunningVersion() + ")");
         init();
     }
 
@@ -179,11 +182,11 @@ public class MultiBranchCommitDialog extends DialogWrapper {
         JPanel headerPanel = new JPanel(new BorderLayout(JBUI.scale(8), 0));
         headerPanel.add(new JBLabel("Selected branches for this commit:"), BorderLayout.WEST);
 
-        JButton configureBtn = new JButton("Configure Branches...");
-        configureBtn.setFocusable(false);
-        configureBtn.setToolTipText("Add, edit, remove, or reorder target branch mappings");
-        configureBtn.addActionListener(e -> openConfigureBranchesDialog());
-        headerPanel.add(configureBtn, BorderLayout.EAST);
+        JButton settingsBtn = new JButton("Settings...");
+        settingsBtn.setFocusable(false);
+        settingsBtn.setToolTipText("Configure branch mappings and target settings");
+        settingsBtn.addActionListener(e -> openSettingsDialog());
+        headerPanel.add(settingsBtn, BorderLayout.EAST);
         branchesBox.add(headerPanel);
 
         if (detection != null && detection.isOnDesignatedBranch()) {
@@ -207,15 +210,13 @@ public class MultiBranchCommitDialog extends DialogWrapper {
 
         // 5. Options
         gbc.gridy++;
-        JPanel optionsBox = new JPanel(new GridLayout(4, 2, JBUI.scale(8), JBUI.scale(4)));
+        JPanel optionsBox = new JPanel(new GridLayout(3, 2, JBUI.scale(8), JBUI.scale(4)));
         optionsBox.setBorder(BorderFactory.createTitledBorder("Options"));
 
         fetchCheckbox = new JBCheckBox("Fetch origin first", config.isFetchOriginFirst());
         pushCheckbox = new JBCheckBox("Push branches to origin", config.isPushAfterCommit());
         mrLinksCheckbox = new JBCheckBox("Generate MR links", config.isGenerateMrLinks());
         openMrCheckbox = new JBCheckBox("Open created MRs in browser", config.isOpenMrLinksInBrowser());
-        mergeMrCheckbox = new JBCheckBox("Merge MR (auto-merge after creation)", config.isGitLabMergeMr());
-        mergeMrCheckbox.setToolTipText("Automatically merge created MRs via GitLab API if allowed for the target branch");
 
         stashCheckbox = new JBCheckBox("Stash other folders & pop after", config.isStashOtherChanges());
         stashCheckbox.setToolTipText("If uncommitted changes exist in other folders, stash before commit and pop after checkout " + config.getCheckoutBranch());
@@ -225,20 +226,17 @@ public class MultiBranchCommitDialog extends DialogWrapper {
 
         mrLinksCheckbox.setEnabled(pushCheckbox.isSelected());
         openMrCheckbox.setEnabled(pushCheckbox.isSelected());
-        mergeMrCheckbox.setEnabled(pushCheckbox.isSelected());
 
         pushCheckbox.addActionListener(e -> {
             boolean p = pushCheckbox.isSelected();
             mrLinksCheckbox.setEnabled(p);
             openMrCheckbox.setEnabled(p);
-            mergeMrCheckbox.setEnabled(p);
         });
 
         optionsBox.add(fetchCheckbox);
         optionsBox.add(pushCheckbox);
         optionsBox.add(mrLinksCheckbox);
         optionsBox.add(openMrCheckbox);
-        optionsBox.add(mergeMrCheckbox);
         optionsBox.add(stashCheckbox);
         optionsBox.add(checkoutTestCheckbox);
         root.add(optionsBox, gbc);
@@ -254,7 +252,7 @@ public class MultiBranchCommitDialog extends DialogWrapper {
         return root;
     }
 
-    private void openConfigureBranchesDialog() {
+    private void openSettingsDialog() {
         ConfigureBranchesDialog dlg = new ConfigureBranchesDialog(project);
         if (dlg.showAndGet()) {
             MultiBranchSettings settings = MultiBranchSettings.getInstance(project);
@@ -269,7 +267,6 @@ public class MultiBranchCommitDialog extends DialogWrapper {
                 config.setGitLabAssignToMe(settings.getState().gitLabAssignToMe);
                 config.setGitLabDeleteSourceBranch(settings.getState().gitLabDeleteSourceBranch);
                 config.setGitLabSquashCommits(settings.getState().gitLabSquashCommits);
-                config.setGitLabMergeMr(settings.getState().gitLabMergeMr);
                 config.setGitLabHost(settings.getState().gitLabHost);
                 String detectedHost = GitLabTokenManager.detectHost(project, settings.getState().gitLabHost);
                 String token = GitLabTokenManager.getToken(detectedHost);
@@ -277,9 +274,6 @@ public class MultiBranchCommitDialog extends DialogWrapper {
                     config.setGitLabApiToken(token);
                 } else {
                     config.setGitLabApiToken(settings.getState().gitLabApiToken);
-                }
-                if (mergeMrCheckbox != null) {
-                    mergeMrCheckbox.setSelected(config.isGitLabMergeMr());
                 }
                 if (checkoutTestCheckbox != null) {
                     checkoutTestCheckbox.setText("Checkout " + config.getCheckoutBranch() + " on finish");
@@ -298,7 +292,6 @@ public class MultiBranchCommitDialog extends DialogWrapper {
     private void rebuildBranchRows() {
         branchesRowsPanel.removeAll();
         mappingCheckboxes.clear();
-        allowMergeCheckboxes.clear();
         previewLabels.clear();
 
         String currentPrefix = (prefixField != null) ? prefixField.getText().trim() : config.getTaskPrefix();
@@ -309,18 +302,9 @@ public class MultiBranchCommitDialog extends DialogWrapper {
             JPanel leftPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, JBUI.scale(6), 0));
 
             JCheckBox cb = new JCheckBox("From " + mapping.getSourceOriginBranch(), mapping.isEnabled());
-            JCheckBox allowMergeCb = new JCheckBox("Allow merge", mapping.isAllowMerge());
-            allowMergeCb.setToolTipText("If checked and 'Merge MR' is active, created MR for this branch will be merged automatically");
-            allowMergeCb.setEnabled(cb.isSelected());
-
-            cb.addActionListener(e -> {
-                mapping.setEnabled(cb.isSelected());
-                allowMergeCb.setEnabled(cb.isSelected());
-            });
-            allowMergeCb.addActionListener(e -> mapping.setAllowMerge(allowMergeCb.isSelected()));
+            cb.addActionListener(e -> mapping.setEnabled(cb.isSelected()));
 
             leftPanel.add(cb);
-            leftPanel.add(allowMergeCb);
 
             String localBranch = mapping.getLocalBranchName(currentPrefix);
             boolean isCurrent = !curBranch.isEmpty() && curBranch.equalsIgnoreCase(localBranch);
@@ -343,7 +327,6 @@ public class MultiBranchCommitDialog extends DialogWrapper {
             }
 
             mappingCheckboxes.add(cb);
-            allowMergeCheckboxes.add(allowMergeCb);
             previewLabels.add(preview);
 
             row.add(leftPanel, BorderLayout.WEST);
@@ -368,9 +351,10 @@ public class MultiBranchCommitDialog extends DialogWrapper {
                 .setItemChosenCallback(selected -> {
                     if (selected != null && !selected.isBlank()) {
                         String cleanMsg = selected;
-                        String p = prefixField.getText().trim();
-                        if (!p.isEmpty() && cleanMsg.startsWith("[" + p + "] ")) {
-                            cleanMsg = cleanMsg.substring(("[" + p + "] ").length());
+                        String p = prefixField.getText().trim().replaceAll("^\\[|\\]$", "").trim();
+                        if (!p.isEmpty()) {
+                            java.util.regex.Pattern pPattern = java.util.regex.Pattern.compile("^\\[" + java.util.regex.Pattern.quote(p) + "\\]\\s*", java.util.regex.Pattern.CASE_INSENSITIVE);
+                            cleanMsg = pPattern.matcher(cleanMsg).replaceFirst("");
                         }
                         messageArea.setText(cleanMsg);
                     }
@@ -472,19 +456,37 @@ public class MultiBranchCommitDialog extends DialogWrapper {
             if (i < mappingCheckboxes.size()) {
                 config.getBranchMappings().get(i).setEnabled(mappingCheckboxes.get(i).isSelected());
             }
-            if (i < allowMergeCheckboxes.size()) {
-                config.getBranchMappings().get(i).setAllowMerge(allowMergeCheckboxes.get(i).isSelected());
-            }
         }
         config.setFetchOriginFirst(fetchCheckbox.isSelected());
         config.setPushAfterCommit(pushCheckbox.isSelected());
         config.setGenerateMrLinks(mrLinksCheckbox.isSelected());
         config.setOpenMrLinksInBrowser(openMrCheckbox.isSelected());
-        config.setGitLabMergeMr(mergeMrCheckbox.isSelected());
         config.setStashOtherChanges(stashCheckbox.isSelected());
         config.setCheckoutTestAfter(checkoutTestCheckbox.isSelected());
 
         if (project != null) {
+            MultiBranchSettings settings = MultiBranchSettings.getInstance(project);
+            if (settings != null) {
+                MultiBranchSettings.State state = settings.getState();
+                state.lastTaskPrefix = config.getTaskPrefix();
+                state.prefixMessageWithTask = config.isPrefixMessageWithTask();
+                state.defaultChangelistName = config.getChangelistName();
+                state.fetchOriginFirst = config.isFetchOriginFirst();
+                state.pushAfterCommit = config.isPushAfterCommit();
+                state.generateMrLinks = config.isGenerateMrLinks();
+                state.openMrLinksInBrowser = config.isOpenMrLinksInBrowser();
+                state.stashOtherChanges = config.isStashOtherChanges();
+                state.checkoutTestAfter = config.isCheckoutTestAfter();
+                for (BranchMapping cm : config.getBranchMappings()) {
+                    for (BranchMapping sm : state.branchMappings) {
+                        if (java.util.Objects.equals(cm.getSourceOriginBranch(), sm.getSourceOriginBranch()) &&
+                                java.util.Objects.equals(cm.getTargetOriginBranchName(), sm.getTargetOriginBranchName())) {
+                            sm.setEnabled(cm.isEnabled());
+                            break;
+                        }
+                    }
+                }
+            }
             VcsConfiguration.getInstance(project).saveCommitMessage(config.getCommitMessage());
             VcsConfiguration.getInstance(project).saveCommitMessage(config.getFormattedCommitMessage());
         }

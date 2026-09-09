@@ -28,11 +28,11 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
         public boolean checkoutTestAfter = true;
         public boolean prefixMessageWithTask = true;
         public String defaultChangelistName = "Changes";
+        public String lastTaskPrefix = "";
         public boolean gitLabCreateMr = true;
         public boolean gitLabAssignToMe = true;
         public boolean gitLabDeleteSourceBranch = true;
         public boolean gitLabSquashCommits = true;
-        public boolean gitLabMergeMr = false;
         public String gitLabHost = "";
         public String gitLabApiToken = "";
 
@@ -42,10 +42,10 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
 
         public void initDefaultMappings() {
             branchMappings.clear();
-            branchMappings.add(new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true, true));
-            branchMappings.add(new BranchMapping("origin/deploy/test", "deploy/test", "-test", true, true));
-            branchMappings.add(new BranchMapping("origin/merge_to_uat", "merge_to_uat", "-uat", true, true));
-            branchMappings.add(new BranchMapping("origin/merge_to_prod", "merge_to_prod", "-prod", true, true));
+            branchMappings.add(new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true));
+            branchMappings.add(new BranchMapping("origin/deploy/test", "deploy/test", "-test", true));
+            branchMappings.add(new BranchMapping("origin/merge_to_uat", "merge_to_uat", "-uat", true));
+            branchMappings.add(new BranchMapping("origin/merge_to_prod", "merge_to_prod", "-prod", true));
         }
 
         public State copy() {
@@ -65,11 +65,11 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
             s.checkoutTestAfter = this.checkoutTestAfter;
             s.prefixMessageWithTask = this.prefixMessageWithTask;
             s.defaultChangelistName = this.defaultChangelistName;
+            s.lastTaskPrefix = this.lastTaskPrefix;
             s.gitLabCreateMr = this.gitLabCreateMr;
             s.gitLabAssignToMe = this.gitLabAssignToMe;
             s.gitLabDeleteSourceBranch = this.gitLabDeleteSourceBranch;
             s.gitLabSquashCommits = this.gitLabSquashCommits;
-            s.gitLabMergeMr = this.gitLabMergeMr;
             s.gitLabHost = this.gitLabHost;
             s.gitLabApiToken = this.gitLabApiToken;
             return s;
@@ -91,10 +91,10 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
                     gitLabAssignToMe == state.gitLabAssignToMe &&
                     gitLabDeleteSourceBranch == state.gitLabDeleteSourceBranch &&
                     gitLabSquashCommits == state.gitLabSquashCommits &&
-                    gitLabMergeMr == state.gitLabMergeMr &&
                     Objects.equals(branchMappings, state.branchMappings) &&
                     Objects.equals(checkoutBranch, state.checkoutBranch) &&
                     Objects.equals(defaultChangelistName, state.defaultChangelistName) &&
+                    Objects.equals(lastTaskPrefix, state.lastTaskPrefix) &&
                     Objects.equals(gitLabHost, state.gitLabHost) &&
                     Objects.equals(gitLabApiToken, state.gitLabApiToken);
         }
@@ -103,8 +103,8 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
         public int hashCode() {
             return Objects.hash(branchMappings, checkoutBranch, fetchOriginFirst, pushAfterCommit,
                     generateMrLinks, openMrLinksInBrowser, stashOtherChanges, checkoutTestAfter,
-                    prefixMessageWithTask, defaultChangelistName, gitLabCreateMr, gitLabAssignToMe,
-                    gitLabDeleteSourceBranch, gitLabSquashCommits, gitLabMergeMr, gitLabHost, gitLabApiToken);
+                    prefixMessageWithTask, defaultChangelistName, lastTaskPrefix, gitLabCreateMr, gitLabAssignToMe,
+                    gitLabDeleteSourceBranch, gitLabSquashCommits, gitLabHost, gitLabApiToken);
         }
     }
 
@@ -161,6 +161,9 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
         config.setStashOtherChanges(myState.stashOtherChanges);
         config.setCheckoutTestAfter(myState.checkoutTestAfter);
         config.setPrefixMessageWithTask(myState.prefixMessageWithTask);
+        if (myState.lastTaskPrefix != null && !myState.lastTaskPrefix.isBlank()) {
+            config.setTaskPrefix(myState.lastTaskPrefix.trim());
+        }
         if (myState.defaultChangelistName != null && !myState.defaultChangelistName.isBlank()) {
             config.setChangelistName(myState.defaultChangelistName.trim());
         }
@@ -168,7 +171,6 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
         config.setGitLabAssignToMe(myState.gitLabAssignToMe);
         config.setGitLabDeleteSourceBranch(myState.gitLabDeleteSourceBranch);
         config.setGitLabSquashCommits(myState.gitLabSquashCommits);
-        config.setGitLabMergeMr(myState.gitLabMergeMr);
         config.setGitLabHost(myState.gitLabHost);
         String detectedHost = GitLabTokenManager.detectHost(project, myState.gitLabHost);
         String token = GitLabTokenManager.getToken(detectedHost);

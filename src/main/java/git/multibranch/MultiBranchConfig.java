@@ -23,15 +23,14 @@ public class MultiBranchConfig {
     private boolean gitLabAssignToMe = true;
     private boolean gitLabDeleteSourceBranch = true;
     private boolean gitLabSquashCommits = true;
-    private boolean gitLabMergeMr = false;
     private String gitLabHost = "";
     private String gitLabApiToken = "";
 
     public MultiBranchConfig() {
-        branchMappings.add(new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true, true));
-        branchMappings.add(new BranchMapping("origin/deploy/test", "deploy/test", "-test", true, true));
-        branchMappings.add(new BranchMapping("origin/merge_to_uat", "merge_to_uat", "-uat", true, true));
-        branchMappings.add(new BranchMapping("origin/merge_to_prod", "merge_to_prod", "-prod", true, true));
+        branchMappings.add(new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true));
+        branchMappings.add(new BranchMapping("origin/deploy/test", "deploy/test", "-test", true));
+        branchMappings.add(new BranchMapping("origin/merge_to_uat", "merge_to_uat", "-uat", true));
+        branchMappings.add(new BranchMapping("origin/merge_to_prod", "merge_to_prod", "-prod", true));
     }
 
     public static MultiBranchConfig fromSettings(MultiBranchSettings settings) {
@@ -66,7 +65,6 @@ public class MultiBranchConfig {
         copy.setGitLabAssignToMe(this.gitLabAssignToMe);
         copy.setGitLabDeleteSourceBranch(this.gitLabDeleteSourceBranch);
         copy.setGitLabSquashCommits(this.gitLabSquashCommits);
-        copy.setGitLabMergeMr(this.gitLabMergeMr);
         copy.setGitLabHost(this.gitLabHost);
         copy.setGitLabApiToken(this.gitLabApiToken);
         return copy;
@@ -75,12 +73,32 @@ public class MultiBranchConfig {
     public String getFormattedCommitMessage() {
         String msg = commitMessage != null ? commitMessage.trim() : "";
         if (prefixMessageWithTask && taskPrefix != null && !taskPrefix.isBlank()) {
-            String tag = "[" + taskPrefix.trim() + "]";
-            if (!msg.startsWith(tag)) {
-                return tag + " " + msg;
+            String cleanPrefix = taskPrefix.trim().replaceAll("^\\[|\\]$", "").trim();
+            if (!cleanPrefix.isEmpty()) {
+                if (isPrefixAlreadyInMessage(msg, cleanPrefix)) {
+                    return msg;
+                }
+                String tag = "[" + cleanPrefix + "]";
+                return msg.isEmpty() ? tag : tag + " " + msg;
             }
         }
         return msg;
+    }
+
+    public static boolean isPrefixAlreadyInMessage(@Nullable String msg, @Nullable String prefix) {
+        if (msg == null || msg.isBlank() || prefix == null || prefix.isBlank()) {
+            return false;
+        }
+        String cleanPrefix = prefix.trim().replaceAll("^\\[|\\]$", "").trim();
+        if (cleanPrefix.isEmpty()) {
+            return false;
+        }
+        // Match cleanPrefix case-insensitively when bounded by non-alphanumeric/non-identifier characters or string boundaries
+        // Matches e.g. "[PREFIX]", "PREFIX: ...", "PREFIX - ...", "PREFIX ...", "Fix for PREFIX"
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
+                "(?i)(^|[^a-zA-Z0-9_-])" + java.util.regex.Pattern.quote(cleanPrefix) + "([^a-zA-Z0-9_-]|$)"
+        );
+        return pattern.matcher(msg).find();
     }
 
     public String getTaskPrefix() {
@@ -205,14 +223,6 @@ public class MultiBranchConfig {
 
     public void setGitLabSquashCommits(boolean gitLabSquashCommits) {
         this.gitLabSquashCommits = gitLabSquashCommits;
-    }
-
-    public boolean isGitLabMergeMr() {
-        return gitLabMergeMr;
-    }
-
-    public void setGitLabMergeMr(boolean gitLabMergeMr) {
-        this.gitLabMergeMr = gitLabMergeMr;
     }
 
     public String getGitLabHost() {

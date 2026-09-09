@@ -4,6 +4,7 @@ import com.intellij.ide.BrowserUtil;
 import com.intellij.notification.NotificationGroupManager;
 import com.intellij.notification.NotificationType;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.progress.Task;
@@ -33,10 +34,29 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 public class MultiBranchService {
 
+    public static void syncDocumentsToDisk(@Nullable Project project) {
+        com.intellij.openapi.application.Application app = ApplicationManager.getApplication();
+        if (app != null) {
+            Runnable saveTask = () -> {
+                FileDocumentManager.getInstance().saveAllDocuments();
+                if (project != null && !project.isDisposed()) {
+                    project.save();
+                }
+            };
+            if (app.isDispatchThread()) {
+                saveTask.run();
+            } else {
+                app.invokeAndWait(saveTask);
+            }
+        }
+    }
+
     public static void execute(Project project, GitRepository repository, MultiBranchConfig config) {
+        syncDocumentsToDisk(project);
         ProgressManager.getInstance().run(new Task.Backgroundable(project, "Processing Multi-Branch Commit...", true) {
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
+                syncDocumentsToDisk(project);
                 File repoDir = new File(repository.getRoot().getPath());
                 List<MultiBranchResultItem> results = new ArrayList<>();
                 File tempPatch = null;
@@ -179,247 +199,236 @@ public class MultiBranchService {
                         if (!mapping.isEnabled()) continue;
 
                         String branchName = mapping.getLocalBranchName(config.getTaskPrefix());
+                        String targetBranch = mapping.getTargetOriginBranchName();
                         indicator.setText("Processing branch: " + branchName);
 
-                        // Checkout branch starting from source origin branch (with --ignore-other-worktrees in case current worktree is on this branch)
-                        GitResult coRes = runGit(worktreeDir, "checkout", "-B", branchName, "--ignore-other-worktrees", mapping.getSourceOriginBranch());
-                        if (coRes.exitCode != 0) {
-                            // Fallback without --ignore-other-worktrees if older git
-                            coRes = runGit(worktreeDir, "checkout", "-B", branchName, mapping.getSourceOriginBranch());
-                        }
-                        if (coRes.exitCode != 0) {
-                            results.add(new MultiBranchResultItem(branchName, mapping.getTargetOriginBranchName(), null, false, null, "Failed to checkout from " + mapping.getSourceOriginBranch() + ": " + coRes.stderr));
-                            continue;
-                        }
+                        try {
+                            // Ensure clean detached worktree before starting each branch
+                            runGit(worktreeDir, "checkout", "--detach");
+                            runGit(worktreeDir, "reset", "--hard");
+                            runGit(worktreeDir, "clean", "-fd");
 
-                        // Apply patch
-                        GitResult applyRes = runGit(worktreeDir, "apply", "--3way", "--binary", tempPatch.getAbsolutePath());
-                        if (applyRes.exitCode != 0) {
-                            results.add(new MultiBranchResultItem(branchName, mapping.getTargetOriginBranchName(), null, false, null, "Failed to apply changes: " + applyRes.stderr));
-                            continue;
-                        }
-
-                        // Stage and Commit
-                        runGit(worktreeDir, "add", "-A");
-                        GitResult commitRes = runGit(worktreeDir, "commit", "-m", commitMessage);
-                        if (commitRes.exitCode != 0) {
-                            results.add(new MultiBranchResultItem(branchName, mapping.getTargetOriginBranchName(), null, false, null, "Commit failed: " + commitRes.stderr));
-                            continue;
-                        }
-
-                        // Get commit hash
-                        GitResult revRes = runGit(worktreeDir, "rev-parse", "--short", "HEAD");
-                        String commitHash = revRes.stdout.trim();
-
-                        // Push to origin with check if branch is behind remote HEAD
-                        boolean pushed = false;
-                        String pushDetails = "Local only";
-                        if (config.isPushAfterCommit()) {
-                            indicator.setText("Checking remote status for " + branchName + "...");
-                            BranchBehindStatus behindStatus = checkBranchBehindStatus(worktreeDir, branchName);
-
-                            boolean useForceLease = forcePushAll[0];
-                            boolean skipThisPush = skipAllRemainingBehind[0];
-
-                            if (behindStatus.isBehind() && !forcePushAll[0] && !skipAllRemainingBehind[0]) {
-                                final AtomicInteger userChoice = new AtomicInteger(2); // default: Skip
-                                ApplicationManager.getApplication().invokeAndWait(() -> {
-                                    String msg = String.format(
-                                            "Branch '%s' is behind remote 'origin/%s' by %d commit(s).\n\n" +
-                                            "A standard push will be rejected by Git because the remote branch contains commits that are not present locally.\n\n" +
-                                            "Do you want to push using --force-with-lease?",
-                                            branchName, branchName, behindStatus.getBehindCount()
-                                    );
-                                    String[] options = new String[]{
-                                            "Push with Force-with-lease",
-                                            "Force-push All Remaining",
-                                            "Skip Push",
-                                            "Cancel Push"
-                                    };
-                                    int res = Messages.showDialog(
-                                            project,
-                                            msg,
-                                            "Branch Behind Remote - " + branchName,
-                                            options,
-                                            0,
-                                            Messages.getWarningIcon()
-                                    );
-                                    userChoice.set(res);
-                                });
-
-                                int choice = userChoice.get();
-                                if (choice == 0) {
-                                    useForceLease = true;
-                                } else if (choice == 1) {
-                                    useForceLease = true;
-                                    forcePushAll[0] = true;
-                                } else if (choice == 2) {
-                                    skipThisPush = true;
-                                } else {
-                                    skipThisPush = true;
-                                    skipAllRemainingBehind[0] = true;
-                                }
+                            // Checkout branch starting from source origin branch (with --ignore-other-worktrees in case current worktree is on this branch)
+                            GitResult coRes = runGit(worktreeDir, "checkout", "-B", branchName, "--ignore-other-worktrees", mapping.getSourceOriginBranch());
+                            if (coRes.exitCode != 0) {
+                                // Fallback without --ignore-other-worktrees if older git
+                                coRes = runGit(worktreeDir, "checkout", "-B", branchName, mapping.getSourceOriginBranch());
+                            }
+                            if (coRes.exitCode != 0) {
+                                revertWorktreeAndLocalBranch(worktreeDir, repoDir, branchName);
+                                String errMsg = "Failed to checkout from " + mapping.getSourceOriginBranch() + ": " + (coRes.stderr.isBlank() ? coRes.stdout : coRes.stderr).trim();
+                                results.add(new MultiBranchResultItem(branchName, targetBranch, null, false, "Not pushed (checkout failed)", null, errMsg));
+                                continue;
                             }
 
-                            if (skipThisPush) {
-                                pushDetails = "Skipped (branch is behind remote by " + behindStatus.getBehindCount() + " commit(s))";
-                            } else if (useForceLease) {
-                                indicator.setText("Pushing " + branchName + " with --force-with-lease...");
-                                GitResult pushRes = runGit(worktreeDir, "push", "--force-with-lease", "-u", "origin", branchName);
-                                if (pushRes.exitCode == 0) {
-                                    pushed = true;
-                                    pushDetails = "Pushed with --force-with-lease";
-                                } else {
-                                    pushDetails = "Failed (--force-with-lease): " + pushRes.stderr.trim();
-                                }
-                            } else {
-                                indicator.setText("Pushing " + branchName + " to origin...");
-                                GitResult pushRes = runGit(worktreeDir, "push", "-u", "origin", branchName);
-                                if (pushRes.exitCode == 0) {
-                                    pushed = true;
-                                    pushDetails = "Pushed to origin";
-                                } else {
-                                    String err = pushRes.stderr.toLowerCase();
-                                    if (err.contains("behind") || err.contains("rejected") || err.contains("non-fast-forward") || err.contains("fetch first")) {
-                                        final AtomicInteger retryChoice = new AtomicInteger(1);
-                                        ApplicationManager.getApplication().invokeAndWait(() -> {
-                                            String retryMsg = "Push for branch '" + branchName + "' was rejected because it is behind remote:\n\n"
-                                                    + pushRes.stderr.trim() + "\n\n"
-                                                    + "Do you want to retry pushing using --force-with-lease?";
-                                            int res = Messages.showYesNoDialog(
-                                                    project,
-                                                    retryMsg,
-                                                    "Push Rejected - " + branchName,
-                                                    "Retry with Force-with-lease",
-                                                    "Skip Push",
-                                                    Messages.getWarningIcon()
-                                            );
-                                            retryChoice.set(res);
-                                        });
+                            // Apply patch
+                            GitResult applyRes = runGit(worktreeDir, "apply", "--3way", "--binary", tempPatch.getAbsolutePath());
+                            if (applyRes.exitCode != 0) {
+                                revertWorktreeAndLocalBranch(worktreeDir, repoDir, branchName);
+                                String errMsg = "Failed to apply changes: " + (applyRes.stderr.isBlank() ? applyRes.stdout : applyRes.stderr).trim();
+                                results.add(new MultiBranchResultItem(branchName, targetBranch, null, false, "Not pushed (patch conflict)", null, errMsg));
+                                continue;
+                            }
 
-                                        if (retryChoice.get() == Messages.YES) {
-                                            indicator.setText("Retrying push for " + branchName + " with --force-with-lease...");
-                                            GitResult retryRes = runGit(worktreeDir, "push", "--force-with-lease", "-u", "origin", branchName);
-                                            if (retryRes.exitCode == 0) {
-                                                pushed = true;
-                                                pushDetails = "Pushed with --force-with-lease";
+                            // Stage and Commit
+                            runGit(worktreeDir, "add", "-A");
+                            GitResult commitRes = runGit(worktreeDir, "commit", "-m", commitMessage);
+                            if (commitRes.exitCode != 0) {
+                                revertWorktreeAndLocalBranch(worktreeDir, repoDir, branchName);
+                                String errMsg = "Commit failed: " + (commitRes.stderr.isBlank() ? commitRes.stdout : commitRes.stderr).trim();
+                                results.add(new MultiBranchResultItem(branchName, targetBranch, null, false, "Not pushed (commit failed)", null, errMsg));
+                                continue;
+                            }
+
+                            // Get commit hash
+                            GitResult revRes = runGit(worktreeDir, "rev-parse", "--short", "HEAD");
+                            String commitHash = revRes.stdout.trim();
+
+                            // Push to origin with check if branch is behind remote HEAD
+                            boolean pushed = false;
+                            String pushDetails = "Local only";
+                            boolean pushFailed = false;
+
+                            if (config.isPushAfterCommit()) {
+                                indicator.setText("Checking remote status for " + branchName + "...");
+                                BranchBehindStatus behindStatus = checkBranchBehindStatus(worktreeDir, branchName);
+
+                                boolean useForceLease = forcePushAll[0];
+                                boolean skipThisPush = skipAllRemainingBehind[0];
+
+                                if (behindStatus.isBehind() && !forcePushAll[0] && !skipAllRemainingBehind[0]) {
+                                    final AtomicInteger userChoice = new AtomicInteger(2); // default: Skip
+                                    ApplicationManager.getApplication().invokeAndWait(() -> {
+                                        String msg = String.format(
+                                                "Branch '%s' is behind remote 'origin/%s' by %d commit(s).\n\n" +
+                                                "A standard push will be rejected by Git because the remote branch contains commits that are not present locally.\n\n" +
+                                                "Do you want to push using --force-with-lease?",
+                                                branchName, branchName, behindStatus.getBehindCount()
+                                        );
+                                        String[] options = new String[]{
+                                                "Push with Force-with-lease",
+                                                "Force-push All Remaining",
+                                                "Skip Push",
+                                                "Cancel Push"
+                                        };
+                                        int res = Messages.showDialog(
+                                                project,
+                                                msg,
+                                                "Branch Behind Remote - " + branchName,
+                                                options,
+                                                0,
+                                                Messages.getWarningIcon()
+                                        );
+                                        userChoice.set(res);
+                                    });
+
+                                    int choice = userChoice.get();
+                                    if (choice == 0) {
+                                        useForceLease = true;
+                                    } else if (choice == 1) {
+                                        useForceLease = true;
+                                        forcePushAll[0] = true;
+                                    } else if (choice == 2) {
+                                        skipThisPush = true;
+                                    } else {
+                                        skipThisPush = true;
+                                        skipAllRemainingBehind[0] = true;
+                                    }
+                                }
+
+                                if (skipThisPush) {
+                                    pushDetails = "Skipped (branch is behind remote by " + behindStatus.getBehindCount() + " commit(s))";
+                                } else if (useForceLease) {
+                                    indicator.setText("Pushing " + branchName + " with --force-with-lease...");
+                                    GitResult pushRes = runGit(worktreeDir, "push", "--force-with-lease", "-u", "origin", branchName);
+                                    if (pushRes.exitCode == 0) {
+                                        pushed = true;
+                                        pushDetails = "Pushed with --force-with-lease";
+                                    } else {
+                                        pushDetails = "Failed (--force-with-lease): " + pushRes.stderr.trim();
+                                        pushFailed = true;
+                                    }
+                                } else {
+                                    indicator.setText("Pushing " + branchName + " to origin...");
+                                    GitResult pushRes = runGit(worktreeDir, "push", "-u", "origin", branchName);
+                                    if (pushRes.exitCode == 0) {
+                                        pushed = true;
+                                        pushDetails = "Pushed to origin";
+                                    } else {
+                                        String err = pushRes.stderr.toLowerCase();
+                                        if (err.contains("behind") || err.contains("rejected") || err.contains("non-fast-forward") || err.contains("fetch first")) {
+                                            final AtomicInteger retryChoice = new AtomicInteger(1);
+                                            ApplicationManager.getApplication().invokeAndWait(() -> {
+                                                String retryMsg = "Push for branch '" + branchName + "' was rejected because it is behind remote:\n\n"
+                                                        + pushRes.stderr.trim() + "\n\n"
+                                                        + "Do you want to retry pushing using --force-with-lease?";
+                                                int res = Messages.showYesNoDialog(
+                                                        project,
+                                                        retryMsg,
+                                                        "Push Rejected - " + branchName,
+                                                        "Retry with Force-with-lease",
+                                                        "Skip Push",
+                                                        Messages.getWarningIcon()
+                                                );
+                                                retryChoice.set(res);
+                                            });
+
+                                            if (retryChoice.get() == Messages.YES) {
+                                                indicator.setText("Retrying push for " + branchName + " with --force-with-lease...");
+                                                GitResult retryRes = runGit(worktreeDir, "push", "--force-with-lease", "-u", "origin", branchName);
+                                                if (retryRes.exitCode == 0) {
+                                                    pushed = true;
+                                                    pushDetails = "Pushed with --force-with-lease";
+                                                } else {
+                                                    pushDetails = "Failed (--force-with-lease): " + retryRes.stderr.trim();
+                                                    pushFailed = true;
+                                                }
                                             } else {
-                                                pushDetails = "Failed (--force-with-lease): " + retryRes.stderr.trim();
+                                                pushDetails = "Rejected by remote (not fast-forward)";
+                                                pushFailed = true;
                                             }
                                         } else {
-                                            pushDetails = "Rejected by remote (not fast-forward)";
+                                            pushDetails = "Push failed: " + pushRes.stderr.trim();
+                                            pushFailed = true;
                                         }
-                                    } else {
-                                        pushDetails = "Push failed: " + pushRes.stderr.trim();
                                     }
                                 }
                             }
-                        }
 
-                        // Create MR via GitLab API or generate web URL
-                        String mrUrl = null;
-                        int createdMrIid = 0;
-                        boolean mrMerged = false;
-                        String mrMergeStatus = null;
-                        boolean mrMergeError = false;
-
-                        if (config.isGenerateMrLinks()) {
-                            if (pushed && config.isGitLabCreateMr() && gitLabToken != null && !gitLabToken.isBlank()) {
-                                indicator.setText("Creating GitLab MR for " + branchName + "...");
-                                GitLabApiService.MrResult mrRes = GitLabApiService.createOrFindMergeRequest(
-                                        repoDir,
-                                        config.getGitLabHost(),
-                                        gitLabToken,
+                            if (pushFailed) {
+                                revertWorktreeAndLocalBranch(worktreeDir, repoDir, branchName);
+                                results.add(new MultiBranchResultItem(
                                         branchName,
-                                        mapping.getTargetOriginBranchName(),
-                                        config.getFormattedCommitMessage(),
-                                        "Auto-created by Multi-Branch Plugin",
-                                        gitLabUserId,
-                                        config.isGitLabDeleteSourceBranch(),
-                                        config.isGitLabSquashCommits()
-                                );
-                                if (mrRes.isSuccess()) {
-                                    mrUrl = mrRes.getWebUrl();
-                                    createdMrIid = mrRes.getIid();
-                                } else {
-                                    mrUrl = GitLabApiService.generateWebMrUrl(repoDir, config.getGitLabHost(), branchName, mapping.getTargetOriginBranchName());
-                                }
-                            } else {
-                                mrUrl = GitLabApiService.generateWebMrUrl(repoDir, config.getGitLabHost(), branchName, mapping.getTargetOriginBranchName());
+                                        targetBranch,
+                                        commitHash,
+                                        false,
+                                        pushDetails,
+                                        null,
+                                        pushDetails
+                                ));
+                                continue;
                             }
-                        }
 
-                        // Merge MR after creation if enabled
-                        if (config.isGitLabMergeMr()) {
-                            if (!mapping.isAllowMerge()) {
-                                mrMergeStatus = "Skipped (Allow merge disabled for this branch)";
-                            } else if (!pushed) {
-                                mrMergeStatus = "Skipped (Branch was not pushed)";
-                            } else if (createdMrIid <= 0) {
-                                mrMergeStatus = "Skipped (MR IID not available via API)";
-                            } else if (gitLabToken == null || gitLabToken.isBlank()) {
-                                mrMergeStatus = "Skipped (GitLab API token not configured)";
-                            } else {
-                                indicator.setText("Merging GitLab MR !" + createdMrIid + " for " + branchName + "...");
-                                GitLabApiService.MergeMrResult mergeRes = GitLabApiService.mergeMergeRequest(
-                                        repoDir,
-                                        config.getGitLabHost(),
-                                        gitLabToken,
-                                        createdMrIid,
-                                        config.isGitLabSquashCommits(),
-                                        config.isGitLabDeleteSourceBranch()
-                                );
-                                if (mergeRes.isSuccess()) {
-                                    mrMerged = true;
-                                    mrMergeStatus = mergeRes.getMessage() + (mergeRes.getMergeCommitSha() != null ? " (" + mergeRes.getMergeCommitSha() + ")" : "");
-                                } else {
-                                    mrMergeError = true;
-                                    mrMergeStatus = "Failed: " + mergeRes.getMessage();
-                                }
-                            }
-                        }
+                            // Create MR via GitLab API or generate web URL
+                            String mrUrl = null;
 
-                        results.add(new MultiBranchResultItem(
-                                branchName,
-                                mapping.getTargetOriginBranchName(),
-                                commitHash,
-                                pushed,
-                                pushDetails,
-                                mrUrl,
-                                null,
-                                mrMerged,
-                                mrMergeStatus,
-                                mrMergeError
-                        ));
-
-                        // "if no errors took place after merging dont open success MR in browser after creattion"
-                        boolean shouldOpenInBrowser = false;
-                        if (config.isOpenMrLinksInBrowser() && mrUrl != null && !mrUrl.isBlank()) {
-                            if (config.isGitLabMergeMr()) {
-                                if (mapping.isAllowMerge()) {
-                                    if (mrMergeError) {
-                                        // Errors took place during/after merge - open in browser for attention
-                                        shouldOpenInBrowser = true;
-                                    } else if (mrMerged) {
-                                        // Merged successfully with no errors - do not open in browser
-                                        shouldOpenInBrowser = false;
+                            if (config.isGenerateMrLinks()) {
+                                if (pushed && config.isGitLabCreateMr() && gitLabToken != null && !gitLabToken.isBlank()) {
+                                    indicator.setText("Creating GitLab MR for " + branchName + "...");
+                                    GitLabApiService.MrResult mrRes = GitLabApiService.createOrFindMergeRequest(
+                                            repoDir,
+                                            config.getGitLabHost(),
+                                            gitLabToken,
+                                            branchName,
+                                            targetBranch,
+                                            config.getFormattedCommitMessage(),
+                                            "Auto-created by Multi-Branch Plugin",
+                                            gitLabUserId,
+                                            config.isGitLabDeleteSourceBranch(),
+                                            config.isGitLabSquashCommits()
+                                    );
+                                    if (mrRes.isSuccess()) {
+                                        mrUrl = mrRes.getWebUrl();
                                     } else {
-                                        // Merge could not be performed - open in browser
-                                        shouldOpenInBrowser = true;
+                                        mrUrl = GitLabApiService.generateWebMrUrl(repoDir, config.getGitLabHost(), branchName, targetBranch);
                                     }
                                 } else {
-                                    // Allow merge not selected for this branch - do not apply Merge MR, open normally
-                                    shouldOpenInBrowser = true;
+                                    mrUrl = GitLabApiService.generateWebMrUrl(repoDir, config.getGitLabHost(), branchName, targetBranch);
                                 }
-                            } else {
-                                // Merge MR option not active - open normally
-                                shouldOpenInBrowser = true;
                             }
-                        }
 
-                        if (shouldOpenInBrowser) {
-                            final String urlToOpen = mrUrl;
-                            ApplicationManager.getApplication().invokeLater(() -> BrowserUtil.browse(urlToOpen));
+                            results.add(new MultiBranchResultItem(
+                                    branchName,
+                                    targetBranch,
+                                    commitHash,
+                                    pushed,
+                                    pushDetails,
+                                    mrUrl,
+                                    null
+                            ));
+
+                            if (config.isOpenMrLinksInBrowser() && mrUrl != null && !mrUrl.isBlank()) {
+                                final String urlToOpen = mrUrl;
+                                ApplicationManager.getApplication().invokeLater(() -> BrowserUtil.browse(urlToOpen));
+                            }
+
+                            // Clean worktree before next branch
+                            runGit(worktreeDir, "checkout", "--detach");
+                            runGit(worktreeDir, "reset", "--hard");
+                            runGit(worktreeDir, "clean", "-fd");
+
+                        } catch (Throwable t) {
+                            revertWorktreeAndLocalBranch(worktreeDir, repoDir, branchName);
+                            String errMsg = "Unexpected error during branch operation: " + t.getMessage();
+                            results.add(new MultiBranchResultItem(
+                                    branchName,
+                                    targetBranch,
+                                    null,
+                                    false,
+                                    "Failed",
+                                    null,
+                                    errMsg
+                            ));
                         }
                     }
 
@@ -503,6 +512,24 @@ public class MultiBranchService {
         });
     }
 
+    public static void revertWorktreeAndLocalBranch(File worktreeDir, File repoDir, String branchName) {
+        try {
+            if (worktreeDir != null && worktreeDir.exists()) {
+                runGit(worktreeDir, "checkout", "--detach");
+                runGit(worktreeDir, "reset", "--hard");
+                runGit(worktreeDir, "clean", "-fd");
+                if (branchName != null && !branchName.isBlank()) {
+                    runGit(worktreeDir, "branch", "-D", branchName);
+                }
+            }
+        } catch (Exception ignored) {}
+        try {
+            if (repoDir != null && repoDir.exists() && branchName != null && !branchName.isBlank()) {
+                runGit(repoDir, "branch", "-D", branchName);
+            }
+        } catch (Exception ignored) {}
+    }
+
     public static String getRepositoryWebUrl(File repoDir) {
         String originUrl = GitLabApiService.getOriginRemoteUrl(repoDir);
         GitLabApiService.GitLabProjectInfo info = GitLabApiService.parseProjectInfo(originUrl, null);
@@ -548,6 +575,7 @@ public class MultiBranchService {
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.directory(workingDir);
             pb.redirectErrorStream(false);
+            pb.environment().put("GIT_TERMINAL_PROMPT", "0");
             Process p = pb.start();
 
             StringBuilder stdout = new StringBuilder();
@@ -574,11 +602,18 @@ public class MultiBranchService {
             outThread.start();
             errThread.start();
 
-            int exitCode = p.waitFor();
-            outThread.join();
-            errThread.join();
+            boolean finished = p.waitFor(120, java.util.concurrent.TimeUnit.SECONDS);
+            if (!finished) {
+                p.destroyForcibly();
+                outThread.interrupt();
+                errThread.interrupt();
+                return new GitResult(-1, stdout.toString(), "Git command timed out after 120 seconds: git " + String.join(" ", args));
+            }
 
-            return new GitResult(exitCode, stdout.toString(), stderr.toString());
+            outThread.join(2000);
+            errThread.join(2000);
+
+            return new GitResult(p.exitValue(), stdout.toString(), stderr.toString());
         } catch (Exception e) {
             return new GitResult(-1, "", e.getMessage());
         }
