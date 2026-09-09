@@ -20,6 +20,7 @@ public class BranchEditDialog extends DialogWrapper {
     private JBTextField targetBranchField;
     private JBTextField suffixField;
     private JBCheckBox enabledCheckbox;
+    private JBCheckBox allowMergeCheckbox;
     private JLabel previewLabel;
     private BranchMapping result;
 
@@ -80,10 +81,14 @@ public class BranchEditDialog extends DialogWrapper {
         suffixPanel.add(suffixField, BorderLayout.CENTER);
         panel.add(suffixPanel, gbc);
 
-        // 4. Enabled checkbox
+        // 4. Enabled and Allow Merge checkboxes
         gbc.gridy++;
+        JPanel checkRow = new JPanel(new FlowLayout(FlowLayout.LEFT, JBUI.scale(12), 0));
         enabledCheckbox = new JBCheckBox("Enabled by default", initial == null || initial.isEnabled());
-        panel.add(enabledCheckbox, gbc);
+        allowMergeCheckbox = new JBCheckBox("Allow merge (apply Merge MR if enabled)", initial == null || initial.isAllowMerge());
+        checkRow.add(enabledCheckbox);
+        checkRow.add(allowMergeCheckbox);
+        panel.add(checkRow, gbc);
 
         // 5. Preview Label
         gbc.gridy++;
@@ -144,7 +149,8 @@ public class BranchEditDialog extends DialogWrapper {
                 sourceBranchField.getText().trim(),
                 targetBranchField.getText().trim(),
                 suffixField.getText().trim(),
-                enabledCheckbox.isSelected()
+                enabledCheckbox.isSelected(),
+                allowMergeCheckbox.isSelected()
         );
         super.doOKAction();
     }

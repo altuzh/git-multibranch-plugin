@@ -317,6 +317,11 @@ public class MultiBranchService {
 
                         // Create MR via GitLab API or generate web URL
                         String mrUrl = null;
+                        int createdMrIid = 0;
+                        boolean mrMerged = false;
+                        String mrMergeStatus = null;
+                        boolean mrMergeError = false;
+
                         if (config.isGenerateMrLinks()) {
                             if (pushed && config.isGitLabCreateMr() && gitLabToken != null && !gitLabToken.isBlank()) {
                                 indicator.setText("Creating GitLab MR for " + branchName + "...");
@@ -334,6 +339,7 @@ public class MultiBranchService {
                                 );
                                 if (mrRes.isSuccess()) {
                                     mrUrl = mrRes.getWebUrl();
+                                    createdMrIid = mrRes.getIid();
                                 } else {
                                     mrUrl = GitLabApiService.generateWebMrUrl(repoDir, config.getGitLabHost(), branchName, mapping.getTargetOriginBranchName());
                                 }
@@ -342,9 +348,75 @@ public class MultiBranchService {
                             }
                         }
 
-                        results.add(new MultiBranchResultItem(branchName, mapping.getTargetOriginBranchName(), commitHash, pushed, pushDetails, mrUrl, null));
+                        // Merge MR after creation if enabled
+                        if (config.isGitLabMergeMr()) {
+                            if (!mapping.isAllowMerge()) {
+                                mrMergeStatus = "Skipped (Allow merge disabled for this branch)";
+                            } else if (!pushed) {
+                                mrMergeStatus = "Skipped (Branch was not pushed)";
+                            } else if (createdMrIid <= 0) {
+                                mrMergeStatus = "Skipped (MR IID not available via API)";
+                            } else if (gitLabToken == null || gitLabToken.isBlank()) {
+                                mrMergeStatus = "Skipped (GitLab API token not configured)";
+                            } else {
+                                indicator.setText("Merging GitLab MR !" + createdMrIid + " for " + branchName + "...");
+                                GitLabApiService.MergeMrResult mergeRes = GitLabApiService.mergeMergeRequest(
+                                        repoDir,
+                                        config.getGitLabHost(),
+                                        gitLabToken,
+                                        createdMrIid,
+                                        config.isGitLabSquashCommits(),
+                                        config.isGitLabDeleteSourceBranch()
+                                );
+                                if (mergeRes.isSuccess()) {
+                                    mrMerged = true;
+                                    mrMergeStatus = mergeRes.getMessage() + (mergeRes.getMergeCommitSha() != null ? " (" + mergeRes.getMergeCommitSha() + ")" : "");
+                                } else {
+                                    mrMergeError = true;
+                                    mrMergeStatus = "Failed: " + mergeRes.getMessage();
+                                }
+                            }
+                        }
 
+                        results.add(new MultiBranchResultItem(
+                                branchName,
+                                mapping.getTargetOriginBranchName(),
+                                commitHash,
+                                pushed,
+                                pushDetails,
+                                mrUrl,
+                                null,
+                                mrMerged,
+                                mrMergeStatus,
+                                mrMergeError
+                        ));
+
+                        // "if no errors took place after merging dont open success MR in browser after creattion"
+                        boolean shouldOpenInBrowser = false;
                         if (config.isOpenMrLinksInBrowser() && mrUrl != null && !mrUrl.isBlank()) {
+                            if (config.isGitLabMergeMr()) {
+                                if (mapping.isAllowMerge()) {
+                                    if (mrMergeError) {
+                                        // Errors took place during/after merge - open in browser for attention
+                                        shouldOpenInBrowser = true;
+                                    } else if (mrMerged) {
+                                        // Merged successfully with no errors - do not open in browser
+                                        shouldOpenInBrowser = false;
+                                    } else {
+                                        // Merge could not be performed - open in browser
+                                        shouldOpenInBrowser = true;
+                                    }
+                                } else {
+                                    // Allow merge not selected for this branch - do not apply Merge MR, open normally
+                                    shouldOpenInBrowser = true;
+                                }
+                            } else {
+                                // Merge MR option not active - open normally
+                                shouldOpenInBrowser = true;
+                            }
+                        }
+
+                        if (shouldOpenInBrowser) {
                             final String urlToOpen = mrUrl;
                             ApplicationManager.getApplication().invokeLater(() -> BrowserUtil.browse(urlToOpen));
                         }
@@ -369,13 +441,21 @@ public class MultiBranchService {
                     }
 
                     // Checkout configured branch after actions
+                    String targetBranch = config.getCheckoutBranch();
+                    if (targetBranch == null || targetBranch.isBlank()) {
+                        targetBranch = "deploy/test";
+                    } else {
+                        targetBranch = targetBranch.trim();
+                    }
+                    if (targetBranch.startsWith("origin/")) {
+                        targetBranch = targetBranch.substring("origin/".length());
+                    }
+
+                    // Also fetch post action checkout branch
+                    indicator.setText("Fetching post-action checkout branch '" + targetBranch + "' from origin...");
+                    runGit(repoDir, "fetch", "origin", targetBranch);
+
                     if (config.isCheckoutTestAfter()) {
-                        String targetBranch = config.getCheckoutBranch();
-                        if (targetBranch == null || targetBranch.isBlank()) {
-                            targetBranch = "deploy/test";
-                        } else {
-                            targetBranch = targetBranch.trim();
-                        }
                         indicator.setText("Checking out " + targetBranch + "...");
                         GitResult coTest = runGit(repoDir, "checkout", targetBranch);
                         if (coTest.exitCode != 0) {
@@ -383,6 +463,9 @@ public class MultiBranchService {
                             if (coTest.exitCode != 0) {
                                 runGit(repoDir, "checkout", "origin/" + targetBranch);
                             }
+                        } else {
+                            // Fast-forward to match latest origin if commits were merged
+                            runGit(repoDir, "merge", "--ff-only", "origin/" + targetBranch);
                         }
                     }
 

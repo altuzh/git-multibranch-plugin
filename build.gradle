@@ -3,7 +3,7 @@ plugins {
 }
 
 group = 'git.multibranch'
-version = '1.1.0'
+version = '1.1.1'
 
 java {
     sourceCompatibility = JavaVersion.VERSION_21
@@ -30,7 +30,13 @@ dependencies {
 def jbrHome = file('C:/Program Files/JetBrains/IntelliJ IDEA 2026.2.1/jbr')
 
 test {
-    enabled = false
+    useJUnitPlatform()
+    if (jbrHome.exists()) {
+        def javaExe = file("${jbrHome}/bin/java.exe").exists() ? file("${jbrHome}/bin/java.exe") : file("${jbrHome}/bin/java")
+        if (javaExe.exists()) {
+            executable = javaExe
+        }
+    }
 }
 
 jar {

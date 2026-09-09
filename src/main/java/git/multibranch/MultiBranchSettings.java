@@ -32,6 +32,7 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
         public boolean gitLabAssignToMe = true;
         public boolean gitLabDeleteSourceBranch = true;
         public boolean gitLabSquashCommits = true;
+        public boolean gitLabMergeMr = false;
         public String gitLabHost = "";
         public String gitLabApiToken = "";
 
@@ -41,10 +42,10 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
 
         public void initDefaultMappings() {
             branchMappings.clear();
-            branchMappings.add(new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true));
-            branchMappings.add(new BranchMapping("origin/deploy/test", "deploy/test", "-test", true));
-            branchMappings.add(new BranchMapping("origin/merge_to_uat", "merge_to_uat", "-uat", true));
-            branchMappings.add(new BranchMapping("origin/merge_to_prod", "merge_to_prod", "-prod", true));
+            branchMappings.add(new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true, true));
+            branchMappings.add(new BranchMapping("origin/deploy/test", "deploy/test", "-test", true, true));
+            branchMappings.add(new BranchMapping("origin/merge_to_uat", "merge_to_uat", "-uat", true, true));
+            branchMappings.add(new BranchMapping("origin/merge_to_prod", "merge_to_prod", "-prod", true, true));
         }
 
         public State copy() {
@@ -68,6 +69,7 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
             s.gitLabAssignToMe = this.gitLabAssignToMe;
             s.gitLabDeleteSourceBranch = this.gitLabDeleteSourceBranch;
             s.gitLabSquashCommits = this.gitLabSquashCommits;
+            s.gitLabMergeMr = this.gitLabMergeMr;
             s.gitLabHost = this.gitLabHost;
             s.gitLabApiToken = this.gitLabApiToken;
             return s;
@@ -89,6 +91,7 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
                     gitLabAssignToMe == state.gitLabAssignToMe &&
                     gitLabDeleteSourceBranch == state.gitLabDeleteSourceBranch &&
                     gitLabSquashCommits == state.gitLabSquashCommits &&
+                    gitLabMergeMr == state.gitLabMergeMr &&
                     Objects.equals(branchMappings, state.branchMappings) &&
                     Objects.equals(checkoutBranch, state.checkoutBranch) &&
                     Objects.equals(defaultChangelistName, state.defaultChangelistName) &&
@@ -101,7 +104,7 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
             return Objects.hash(branchMappings, checkoutBranch, fetchOriginFirst, pushAfterCommit,
                     generateMrLinks, openMrLinksInBrowser, stashOtherChanges, checkoutTestAfter,
                     prefixMessageWithTask, defaultChangelistName, gitLabCreateMr, gitLabAssignToMe,
-                    gitLabDeleteSourceBranch, gitLabSquashCommits, gitLabHost, gitLabApiToken);
+                    gitLabDeleteSourceBranch, gitLabSquashCommits, gitLabMergeMr, gitLabHost, gitLabApiToken);
         }
     }
 
@@ -152,6 +155,7 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
         config.setGitLabAssignToMe(myState.gitLabAssignToMe);
         config.setGitLabDeleteSourceBranch(myState.gitLabDeleteSourceBranch);
         config.setGitLabSquashCommits(myState.gitLabSquashCommits);
+        config.setGitLabMergeMr(myState.gitLabMergeMr);
         config.setGitLabHost(myState.gitLabHost);
         String token = GitLabTokenManager.getToken();
         if (token != null && !token.isBlank()) {

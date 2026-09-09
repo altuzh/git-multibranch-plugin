@@ -18,18 +18,54 @@ public class MultiBranchResultDialog extends DialogWrapper {
 
     public MultiBranchResultDialog(@Nullable Project project, List<MultiBranchResultItem> results) {
         super(project, true);
-        this.results = results;
-        boolean anyGitHub = results != null && results.stream().anyMatch(r -> r.getMrUrl() != null && r.getMrUrl().contains("github.com"));
-        boolean anyGitLab = results != null && results.stream().anyMatch(r -> r.getMrUrl() != null && !r.getMrUrl().contains("github.com"));
-        String typeLabel = (anyGitHub && !anyGitLab) ? "PR" : (anyGitLab && !anyGitHub) ? "MR" : "PR / MR";
-        setTitle("Multi-Branch Execution Summary & " + typeLabel + " Links");
+        this.results = results != null ? results : List.of();
+        setTitle("Multi-Branch Review & Execution Summary");
+        setOKButtonText("Close");
         init();
     }
 
     @Override
     protected @Nullable JComponent createCenterPanel() {
         JPanel panel = new JPanel(new BorderLayout(0, JBUI.scale(10)));
-        panel.setPreferredSize(new Dimension(JBUI.scale(700), JBUI.scale(380)));
+        panel.setPreferredSize(new Dimension(JBUI.scale(740), JBUI.scale(440)));
+
+        // Top Summary Banner
+        long successCount = results.stream().filter(MultiBranchResultItem::isSuccess).count();
+        long pushedCount = results.stream().filter(MultiBranchResultItem::isPushed).count();
+        long mrCount = results.stream().filter(r -> r.getMrUrl() != null && !r.getMrUrl().isBlank()).count();
+        long mergedCount = results.stream().filter(MultiBranchResultItem::isMrMerged).count();
+        long mergeErrorsCount = results.stream().filter(MultiBranchResultItem::isMrMergeError).count();
+
+        JPanel topBanner = new JPanel(new BorderLayout(JBUI.scale(8), JBUI.scale(4)));
+        topBanner.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()),
+                JBUI.Borders.empty(4, 4, 8, 4)
+        ));
+
+        JLabel titleLbl = new JLabel("Workflow Execution Review (" + successCount + "/" + results.size() + " branches succeeded)");
+        titleLbl.setFont(titleLbl.getFont().deriveFont(Font.BOLD, JBUI.scaleFontSize(14)));
+        if (successCount == results.size()) {
+            titleLbl.setForeground(new Color(0x2E7D32));
+        } else {
+            titleLbl.setForeground(JBUI.CurrentTheme.NotificationWarning.foregroundColor());
+        }
+        topBanner.add(titleLbl, BorderLayout.NORTH);
+
+        StringBuilder stats = new StringBuilder();
+        stats.append("Pushed: ").append(pushedCount).append("/").append(results.size());
+        if (mrCount > 0) {
+            stats.append("  |  MRs Created: ").append(mrCount);
+        }
+        if (mergedCount > 0) {
+            stats.append("  |  Auto-Merged: ").append(mergedCount);
+        }
+        if (mergeErrorsCount > 0) {
+            stats.append("  |  Merge Errors: ").append(mergeErrorsCount);
+        }
+        JLabel statsLbl = new JLabel(stats.toString());
+        statsLbl.setForeground(JBUI.CurrentTheme.Label.foreground());
+        topBanner.add(statsLbl, BorderLayout.CENTER);
+        panel.add(topBanner, BorderLayout.NORTH);
 
         JPanel listPanel = new JPanel();
         listPanel.setLayout(new BoxLayout(listPanel, BoxLayout.Y_AXIS));
@@ -49,7 +85,7 @@ public class MultiBranchResultDialog extends DialogWrapper {
                 titleLabel.setForeground(JBUI.CurrentTheme.NotificationError.foregroundColor());
             }
 
-            JPanel detailsPanel = new JPanel(new GridLayout(0, 1, 0, JBUI.scale(4)));
+            JPanel detailsPanel = new JPanel(new GridLayout(0, 1, 0, JBUI.scale(3)));
             if (item.isSuccess()) {
                 detailsPanel.add(new JBLabel("Commit: " + (item.getCommitHash() != null ? item.getCommitHash() : "N/A")));
                 JLabel pushLbl = new JBLabel("Push: " + item.getPushDetails());
@@ -59,6 +95,7 @@ public class MultiBranchResultDialog extends DialogWrapper {
                     pushLbl.setForeground(JBUI.CurrentTheme.Label.disabledForeground());
                 }
                 detailsPanel.add(pushLbl);
+
                 if (item.getMrUrl() != null && !item.getMrUrl().isEmpty()) {
                     JTextField urlField = new JTextField(item.getMrUrl());
                     urlField.setEditable(false);
@@ -83,6 +120,24 @@ public class MultiBranchResultDialog extends DialogWrapper {
                     btnRow.add(openBtn);
                     mrRow.add(btnRow, BorderLayout.EAST);
                     detailsPanel.add(mrRow);
+                }
+
+                // MR Merge Status row
+                if (item.getMrMergeStatus() != null && !item.getMrMergeStatus().isBlank()) {
+                    JLabel mergeLbl = new JLabel();
+                    if (item.isMrMerged()) {
+                        mergeLbl.setText("✓ Auto-merge: " + item.getMrMergeStatus());
+                        mergeLbl.setFont(mergeLbl.getFont().deriveFont(Font.BOLD));
+                        mergeLbl.setForeground(new Color(0x2E7D32));
+                    } else if (item.isMrMergeError()) {
+                        mergeLbl.setText("✗ Auto-merge: " + item.getMrMergeStatus());
+                        mergeLbl.setFont(mergeLbl.getFont().deriveFont(Font.BOLD));
+                        mergeLbl.setForeground(JBUI.CurrentTheme.NotificationError.foregroundColor());
+                    } else {
+                        mergeLbl.setText("● Auto-merge: " + item.getMrMergeStatus());
+                        mergeLbl.setForeground(JBUI.CurrentTheme.Label.disabledForeground());
+                    }
+                    detailsPanel.add(mergeLbl);
                 }
             } else {
                 detailsPanel.add(new JBLabel("Error: " + item.getErrorMessage()));

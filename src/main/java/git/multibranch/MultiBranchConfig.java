@@ -20,14 +20,15 @@ public class MultiBranchConfig {
     private boolean gitLabAssignToMe = true;
     private boolean gitLabDeleteSourceBranch = true;
     private boolean gitLabSquashCommits = true;
+    private boolean gitLabMergeMr = false;
     private String gitLabHost = "";
     private String gitLabApiToken = "";
 
     public MultiBranchConfig() {
-        branchMappings.add(new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true));
-        branchMappings.add(new BranchMapping("origin/deploy/test", "deploy/test", "-test", true));
-        branchMappings.add(new BranchMapping("origin/merge_to_uat", "merge_to_uat", "-uat", true));
-        branchMappings.add(new BranchMapping("origin/merge_to_prod", "merge_to_prod", "-prod", true));
+        branchMappings.add(new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true, true));
+        branchMappings.add(new BranchMapping("origin/deploy/test", "deploy/test", "-test", true, true));
+        branchMappings.add(new BranchMapping("origin/merge_to_uat", "merge_to_uat", "-uat", true, true));
+        branchMappings.add(new BranchMapping("origin/merge_to_prod", "merge_to_prod", "-prod", true, true));
     }
 
     public static MultiBranchConfig fromSettings(MultiBranchSettings settings) {
@@ -58,6 +59,7 @@ public class MultiBranchConfig {
         copy.setGitLabAssignToMe(this.gitLabAssignToMe);
         copy.setGitLabDeleteSourceBranch(this.gitLabDeleteSourceBranch);
         copy.setGitLabSquashCommits(this.gitLabSquashCommits);
+        copy.setGitLabMergeMr(this.gitLabMergeMr);
         copy.setGitLabHost(this.gitLabHost);
         copy.setGitLabApiToken(this.gitLabApiToken);
         return copy;
@@ -196,6 +198,14 @@ public class MultiBranchConfig {
 
     public void setGitLabSquashCommits(boolean gitLabSquashCommits) {
         this.gitLabSquashCommits = gitLabSquashCommits;
+    }
+
+    public boolean isGitLabMergeMr() {
+        return gitLabMergeMr;
+    }
+
+    public void setGitLabMergeMr(boolean gitLabMergeMr) {
+        this.gitLabMergeMr = gitLabMergeMr;
     }
 
     public String getGitLabHost() {

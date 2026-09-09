@@ -344,4 +344,137 @@ public class BranchSettingsTest {
         assertFalse(liveNonExistent.isRemoteExists());
         assertFalse(liveNonExistent.isBehind());
     }
+
+    @Test
+    public void testBranchMappingAllowMerge() {
+        BranchMapping bm1 = new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true);
+        assertTrue(bm1.isAllowMerge(), "Default constructor or 4-arg constructor should have allowMerge=true");
+
+        BranchMapping bm2 = new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true, false);
+        assertFalse(bm2.isAllowMerge());
+
+        bm2.setAllowMerge(true);
+        assertTrue(bm2.isAllowMerge());
+
+        // Copy
+        BranchMapping copy = bm2.copy();
+        assertEquals(bm2, copy);
+        assertEquals(bm2.hashCode(), copy.hashCode());
+
+        copy.setAllowMerge(false);
+        assertNotEquals(bm2, copy);
+        assertNotEquals(bm2.hashCode(), copy.hashCode());
+    }
+
+    @Test
+    public void testStateAndConfigGitLabMergeMr() {
+        MultiBranchSettings.State state = new MultiBranchSettings.State();
+        assertFalse(state.gitLabMergeMr);
+        for (BranchMapping mapping : state.branchMappings) {
+            assertTrue(mapping.isAllowMerge(), "Default mapping should have allowMerge enabled");
+        }
+
+        state.gitLabMergeMr = true;
+        MultiBranchSettings.State stateCopy = state.copy();
+        assertEquals(state, stateCopy);
+        assertEquals(state.hashCode(), stateCopy.hashCode());
+
+        stateCopy.gitLabMergeMr = false;
+        assertNotEquals(state, stateCopy);
+
+        // toConfig
+        MultiBranchSettings settings = new MultiBranchSettings();
+        settings.loadState(state);
+        MultiBranchConfig config = MultiBranchConfig.fromSettings(settings);
+        assertTrue(config.isGitLabMergeMr());
+        for (BranchMapping m : config.getBranchMappings()) {
+            assertTrue(m.isAllowMerge());
+        }
+
+        // config copy
+        MultiBranchConfig configCopy = config.copy();
+        assertTrue(configCopy.isGitLabMergeMr());
+        configCopy.setGitLabMergeMr(false);
+        assertFalse(configCopy.isGitLabMergeMr());
+        assertTrue(config.isGitLabMergeMr());
+    }
+
+    @Test
+    public void testGitLabMergeMrResult() {
+        GitLabApiService.MergeMrResult success = GitLabApiService.MergeMrResult.success("Merged successfully", "789abc");
+        assertTrue(success.isSuccess());
+        assertEquals("Merged successfully", success.getMessage());
+        assertEquals("789abc", success.getMergeCommitSha());
+
+        GitLabApiService.MergeMrResult error = GitLabApiService.MergeMrResult.error("Conflict detected");
+        assertFalse(error.isSuccess());
+        assertEquals("Conflict detected", error.getMessage());
+        assertNull(error.getMergeCommitSha());
+    }
+
+    @Test
+    public void testResultItemMrMergeFields() {
+        MultiBranchResultItem itemSuccess = new MultiBranchResultItem(
+                "TASK-101-dev", "deploy/dev", "abc1234", true, "Pushed to origin",
+                "https://gitlab.example.com/group/repo/-/merge_requests/42", null,
+                true, "Merged successfully (sha123)", false
+        );
+        assertTrue(itemSuccess.isSuccess());
+        assertTrue(itemSuccess.isMrMerged());
+        assertFalse(itemSuccess.isMrMergeError());
+        assertEquals("Merged successfully (sha123)", itemSuccess.getMrMergeStatus());
+
+        MultiBranchResultItem itemFailed = new MultiBranchResultItem(
+                "TASK-101-test", "deploy/test", "def5678", true, "Pushed to origin",
+                "https://gitlab.example.com/group/repo/-/merge_requests/43", null,
+                false, "Failed: HTTP 405 Branch cannot be merged", true
+        );
+        assertTrue(itemFailed.isSuccess()); // commit/push succeeded
+        assertFalse(itemFailed.isMrMerged());
+        assertTrue(itemFailed.isMrMergeError());
+        assertEquals("Failed: HTTP 405 Branch cannot be merged", itemFailed.getMrMergeStatus());
+    }
+
+    @Test
+    public void testBrowserOpenLogicAfterMerge() {
+        // Case 1: Merge MR option is enabled, branch allows merge, merge succeeded without error -> DO NOT OPEN IN BROWSER
+        boolean openInBrowser1 = decideOpenInBrowser(true, true, true, false, true, "https://gitlab.com/mr/1");
+        assertFalse(openInBrowser1, "Successful merge without error should suppress opening in browser");
+
+        // Case 2: Merge MR option is enabled, branch allows merge, merge failed with error -> OPEN IN BROWSER
+        boolean openInBrowser2 = decideOpenInBrowser(true, true, false, true, true, "https://gitlab.com/mr/2");
+        assertTrue(openInBrowser2, "Merge failure should open MR in browser so user can review/resolve conflicts");
+
+        // Case 3: Merge MR option is enabled, but branch does NOT allow merge -> OPEN IN BROWSER (Merge MR not applied to this branch)
+        boolean openInBrowser3 = decideOpenInBrowser(true, false, false, false, true, "https://gitlab.com/mr/3");
+        assertTrue(openInBrowser3, "Branch with Allow merge unchecked should follow standard browser open behavior");
+
+        // Case 4: Merge MR option is disabled -> OPEN IN BROWSER
+        boolean openInBrowser4 = decideOpenInBrowser(false, true, false, false, true, "https://gitlab.com/mr/4");
+        assertTrue(openInBrowser4, "When Merge MR is disabled, standard browser open behavior applies");
+
+        // Case 5: Open MR in browser setting is disabled -> DO NOT OPEN
+        boolean openInBrowser5 = decideOpenInBrowser(true, true, false, true, false, "https://gitlab.com/mr/5");
+        assertFalse(openInBrowser5, "When open in browser setting is off, do not open");
+    }
+
+    private boolean decideOpenInBrowser(boolean isGitLabMergeMr, boolean isAllowMerge, boolean mrMerged, boolean mrMergeError, boolean isOpenMrLinksInBrowser, String mrUrl) {
+        if (!isOpenMrLinksInBrowser || mrUrl == null || mrUrl.isBlank()) {
+            return false;
+        }
+        if (isGitLabMergeMr) {
+            if (isAllowMerge) {
+                if (mrMergeError) {
+                    return true;
+                } else if (mrMerged) {
+                    return false;
+                } else {
+                    return true;
+                }
+            } else {
+                return true;
+            }
+        }
+        return true;
+    }
 }

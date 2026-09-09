@@ -82,7 +82,10 @@ public class MultiBranchCommitAction extends AnAction {
         Collection<GitRepository> repos = GitRepositoryManager.getInstance(project).getRepositories();
         if (repos.isEmpty()) return;
         GitRepository repository = repos.iterator().next();
+        startMultiBranchWorkflow(project, repository);
+    }
 
+    private static void startMultiBranchWorkflow(@NotNull Project project, @NotNull GitRepository repository) {
         MultiBranchSettings settings = MultiBranchSettings.getInstance(project);
         MultiBranchConfig config = MultiBranchConfig.fromSettings(settings);
 
@@ -91,7 +94,10 @@ public class MultiBranchCommitAction extends AnAction {
 
         MultiBranchCommitDialog dialog = new MultiBranchCommitDialog(project, config, detection.getDetectedPrefix(), detection);
         if (dialog.showAndGet()) {
-            MultiBranchService.execute(project, repository, dialog.getConfig());
+            MultiBranchConfirmDialog confirmDialog = new MultiBranchConfirmDialog(project, repository, dialog.getConfig());
+            if (confirmDialog.showAndGet()) {
+                MultiBranchService.execute(project, repository, dialog.getConfig());
+            }
         }
     }
 
@@ -126,15 +132,6 @@ public class MultiBranchCommitAction extends AnAction {
         }
         if (repository == null) return;
 
-        MultiBranchSettings settings = MultiBranchSettings.getInstance(project);
-        MultiBranchConfig config = MultiBranchConfig.fromSettings(settings);
-
-        String currentBranch = repository.getCurrentBranchName();
-        BranchDetectionResult detection = detectBranchContext(currentBranch, config.getBranchMappings());
-
-        MultiBranchCommitDialog dialog = new MultiBranchCommitDialog(project, config, detection.getDetectedPrefix(), detection);
-        if (dialog.showAndGet()) {
-            MultiBranchService.execute(project, repository, dialog.getConfig());
-        }
+        startMultiBranchWorkflow(project, repository);
     }
 }

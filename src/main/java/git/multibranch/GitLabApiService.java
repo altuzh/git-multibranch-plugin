@@ -86,6 +86,30 @@ public class GitLabApiService {
         public boolean isExisting() { return existing; }
     }
 
+    public static class MergeMrResult {
+        private final boolean success;
+        private final String message;
+        private final String mergeCommitSha;
+
+        public MergeMrResult(boolean success, String message, String mergeCommitSha) {
+            this.success = success;
+            this.message = message;
+            this.mergeCommitSha = mergeCommitSha;
+        }
+
+        public static MergeMrResult success(String message, String mergeCommitSha) {
+            return new MergeMrResult(true, message, mergeCommitSha);
+        }
+
+        public static MergeMrResult error(String message) {
+            return new MergeMrResult(false, message, null);
+        }
+
+        public boolean isSuccess() { return success; }
+        public String getMessage() { return message; }
+        public String getMergeCommitSha() { return mergeCommitSha; }
+    }
+
     public static GitLabProjectInfo parseProjectInfo(String remoteUrl, String hostOverride) {
         if (remoteUrl == null || remoteUrl.isBlank()) return null;
         String raw = remoteUrl.trim();
@@ -291,6 +315,78 @@ public class GitLabApiService {
         } catch (Exception ex) {
             return MrResult.error("Failed to create MR via API: " + ex.getMessage());
         }
+    }
+
+    public static MergeMrResult mergeMergeRequest(
+            File repoDir,
+            String hostOverride,
+            String token,
+            int mrIid,
+            boolean squash,
+            boolean shouldRemoveSourceBranch
+    ) {
+        if (mrIid <= 0) {
+            return MergeMrResult.error("Invalid Merge Request IID: " + mrIid);
+        }
+        if (token == null || token.isBlank()) {
+            return MergeMrResult.error("GitLab API Token is required to merge MR.");
+        }
+        String remoteUrl = getOriginRemoteUrl(repoDir);
+        GitLabProjectInfo info = parseProjectInfo(remoteUrl, hostOverride);
+        if (info == null) {
+            return MergeMrResult.error("Unable to parse GitLab project from git origin URL: " + remoteUrl);
+        }
+
+        String mergeUrl = info.getApiUrl() + "/projects/" + info.getEncodedPath() + "/merge_requests/" + mrIid + "/merge";
+        StringBuilder json = new StringBuilder();
+        json.append("{");
+        json.append("\"squash\":").append(squash).append(",");
+        json.append("\"should_remove_source_branch\":").append(shouldRemoveSourceBranch);
+        json.append("}");
+
+        for (int attempt = 1; attempt <= 3; attempt++) {
+            try {
+                HttpRequest putReq = HttpRequest.newBuilder()
+                        .uri(URI.create(mergeUrl))
+                        .timeout(Duration.ofSeconds(15))
+                        .header("PRIVATE-TOKEN", token.trim())
+                        .header("Content-Type", "application/json")
+                        .PUT(HttpRequest.BodyPublishers.ofString(json.toString(), StandardCharsets.UTF_8))
+                        .build();
+
+                HttpResponse<String> response = HTTP_CLIENT.send(putReq, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                int status = response.statusCode();
+                String body = response.body() != null ? response.body().trim() : "";
+
+                if (status == 200 || status == 202) {
+                    String sha = extractStringJson(body, "merge_commit_sha");
+                    if (sha == null || sha.isBlank()) {
+                        sha = extractStringJson(body, "sha");
+                    }
+                    String state = extractStringJson(body, "state");
+                    String msg = (state != null && !state.isBlank()) ? "MR state: " + state : "Merged successfully";
+                    return MergeMrResult.success(msg, sha);
+                } else if ((status == 405 || status == 406) && attempt < 3) {
+                    try {
+                        Thread.sleep(1500);
+                    } catch (InterruptedException ignored) {}
+                    continue;
+                } else {
+                    String errMsg = extractStringJson(body, "message");
+                    if (errMsg == null || errMsg.isBlank()) {
+                        errMsg = body.length() > 200 ? body.substring(0, 200) : body;
+                    }
+                    return MergeMrResult.error("HTTP " + status + (errMsg.isBlank() ? "" : ": " + errMsg));
+                }
+            } catch (Exception ex) {
+                if (attempt < 3) {
+                    try { Thread.sleep(1000); } catch (InterruptedException ignored) {}
+                    continue;
+                }
+                return MergeMrResult.error("Merge request call failed: " + ex.getMessage());
+            }
+        }
+        return MergeMrResult.error("Merge request could not be merged after retries.");
     }
 
     public static String generateWebMrUrl(File repoDir, String hostOverride, String sourceBranch, String targetBranch) {

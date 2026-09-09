@@ -36,8 +36,13 @@ public class BranchMappingsTablePanel extends JPanel {
         // Adjust column widths
         TableColumn enabledCol = table.getColumnModel().getColumn(0);
         enabledCol.setPreferredWidth(JBUI.scale(60));
-        enabledCol.setMaxWidth(JBUI.scale(80));
+        enabledCol.setMaxWidth(JBUI.scale(75));
         enabledCol.setMinWidth(JBUI.scale(50));
+
+        TableColumn allowMergeCol = table.getColumnModel().getColumn(1);
+        allowMergeCol.setPreferredWidth(JBUI.scale(85));
+        allowMergeCol.setMaxWidth(JBUI.scale(105));
+        allowMergeCol.setMinWidth(JBUI.scale(75));
 
         // Double click to edit row
         new DoubleClickListener() {
@@ -150,10 +155,10 @@ public class BranchMappingsTablePanel extends JPanel {
                 Messages.getQuestionIcon());
         if (confirm == Messages.YES) {
             mappings.clear();
-            mappings.add(new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true));
-            mappings.add(new BranchMapping("origin/deploy/test", "deploy/test", "-test", true));
-            mappings.add(new BranchMapping("origin/merge_to_uat", "merge_to_uat", "-uat", true));
-            mappings.add(new BranchMapping("origin/merge_to_prod", "merge_to_prod", "-prod", true));
+            mappings.add(new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true, true));
+            mappings.add(new BranchMapping("origin/deploy/test", "deploy/test", "-test", true, true));
+            mappings.add(new BranchMapping("origin/merge_to_uat", "merge_to_uat", "-uat", true, true));
+            mappings.add(new BranchMapping("origin/merge_to_prod", "merge_to_prod", "-prod", true, true));
             tableModel.fireTableDataChanged();
             if (!mappings.isEmpty()) {
                 table.setRowSelectionInterval(0, 0);
@@ -194,7 +199,7 @@ public class BranchMappingsTablePanel extends JPanel {
     }
 
     private class BranchTableModel extends AbstractTableModel {
-        private final String[] columnNames = {"Enabled", "Source Origin Branch", "Merge Target Branch", "Branch Suffix"};
+        private final String[] columnNames = {"Enabled", "Allow Merge", "Source Origin Branch", "Merge Target Branch", "Branch Suffix"};
 
         @Override
         public int getRowCount() {
@@ -213,13 +218,13 @@ public class BranchMappingsTablePanel extends JPanel {
 
         @Override
         public Class<?> getColumnClass(int columnIndex) {
-            if (columnIndex == 0) return Boolean.class;
+            if (columnIndex == 0 || columnIndex == 1) return Boolean.class;
             return String.class;
         }
 
         @Override
         public boolean isCellEditable(int rowIndex, int columnIndex) {
-            return columnIndex == 0;
+            return columnIndex == 0 || columnIndex == 1;
         }
 
         @Override
@@ -227,9 +232,10 @@ public class BranchMappingsTablePanel extends JPanel {
             BranchMapping mapping = mappings.get(rowIndex);
             return switch (columnIndex) {
                 case 0 -> mapping.isEnabled();
-                case 1 -> mapping.getSourceOriginBranch();
-                case 2 -> mapping.getTargetOriginBranchName();
-                case 3 -> mapping.getBranchSuffix();
+                case 1 -> mapping.isAllowMerge();
+                case 2 -> mapping.getSourceOriginBranch();
+                case 3 -> mapping.getTargetOriginBranchName();
+                case 4 -> mapping.getBranchSuffix();
                 default -> null;
             };
         }
@@ -240,6 +246,9 @@ public class BranchMappingsTablePanel extends JPanel {
             BranchMapping mapping = mappings.get(rowIndex);
             if (columnIndex == 0 && aValue instanceof Boolean b) {
                 mapping.setEnabled(b);
+                fireTableCellUpdated(rowIndex, columnIndex);
+            } else if (columnIndex == 1 && aValue instanceof Boolean b) {
+                mapping.setAllowMerge(b);
                 fireTableCellUpdated(rowIndex, columnIndex);
             }
         }
