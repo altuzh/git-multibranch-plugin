@@ -1,0 +1,56 @@
+plugins {
+    id 'java'
+}
+
+group = 'git.multibranch'
+version = '1.1.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
+
+repositories {
+    mavenCentral()
+}
+
+def ideaHome = System.getenv('IDEA_HOME') ?: (file('C:/Program Files/JetBrains/IntelliJ IDEA 2026.2.1').exists() ? 'C:/Program Files/JetBrains/IntelliJ IDEA 2026.2.1' : null)
+
+dependencies {
+    if (ideaHome != null && file(ideaHome).exists()) {
+        compileOnly fileTree(dir: "${ideaHome}/lib", include: ['**/*.jar'])
+        compileOnly fileTree(dir: "${ideaHome}/plugins/vcs-git/lib", include: ['**/*.jar'])
+        testImplementation fileTree(dir: "${ideaHome}/lib", include: ['**/*.jar'])
+        testImplementation fileTree(dir: "${ideaHome}/plugins/vcs-git/lib", include: ['**/*.jar'])
+    }
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+def jbrHome = file('C:/Program Files/JetBrains/IntelliJ IDEA 2026.2.1/jbr')
+
+test {
+    enabled = false
+}
+
+jar {
+    archiveBaseName.set('git-multibranch-plugin')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+}
+
+tasks.register('buildPlugin', Zip) {
+    dependsOn jar
+    archiveBaseName.set('git-multibranch-plugin')
+    archiveVersion.set(project.version.toString())
+    into('git-multibranch-plugin/lib') {
+        from jar.archiveFile
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    if (jbrHome.exists() && JavaVersion.current() < JavaVersion.VERSION_25) {
+        options.fork = true
+        options.forkOptions.javaHome = jbrHome
+    }
+}
