@@ -7,11 +7,12 @@ An IntelliJ IDEA plugin for automating multi-branch Git workflows across target 
 - **Multi-Branch Target Commit & Push**:
   - Automatically isolates commits into a temporary detached Git worktree (`.git/temp_mb_worktree_*`).
   - Commits changes to each configured branch (`{taskPrefix}-dev`, `{taskPrefix}-test`, `{taskPrefix}-uat`, `{taskPrefix}-prod`) starting from their corresponding origin tracking branches.
+  - **Intelligent Starting Point & Fast-Forward Updates**: When target branches already exist on `origin` with active unmerged work, the plugin automatically branches from `origin/{branch}` (or local commits if ahead) instead of hard-resetting to source branches. New changes are added on top of existing commits, enabling seamless fast-forward pushes without triggering behind-remote warnings or requiring force-pushes.
   - Automatically pushes branches to `origin` with tracking (`-u`).
   - **Behind-Remote & Force-with-Lease Protection**: Automatically inspects whether the branch already exists on remote and is behind/diverged from remote HEAD. Prompts the developer with an interactive confirmation dialog to push safely with `--force-with-lease` (or force-push all / skip / cancel).
 - **Designated Branch Context Detection**:
   - Automatically identifies whether you are currently on one of the target task branches (e.g. `TASK-101-dev`), extracts task prefix cleanly, and highlights the current branch in the dialog UI with `[CURRENT BRANCH]`.
-  - Tags branches already existing on origin with `[ON REMOTE]`.
+  - Tags branches already existing on origin with `[ON REMOTE - UPDATING]`.
 - **Configurable Branch Mappings**:
   - Configure target branches via **Settings -> Version Control -> Multi-Branch Workflow** or via the **Settings...** button in the commit dialog.
   - Add, edit, remove, reorder, or reset branch mappings (source tracking branch, MR merge target branch, local branch suffix, enabled/disabled by default).

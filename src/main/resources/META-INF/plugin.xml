@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>git.multibranch</id>
     <name>Multi-Branch Commit &amp; Push</name>
-    <version>1.1.5</version>
+    <version>1.1.6</version>
     <vendor email="altuzh@users.noreply.github.com" url="https://github.com/altuzh/git-multibranch-plugin">Alexey Tuzhikov</vendor>
 
     <description><![CDATA[

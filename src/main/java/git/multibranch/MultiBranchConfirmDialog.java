@@ -11,6 +11,7 @@ import org.jetbrains.annotations.Nullable;
 
 import javax.swing.*;
 import java.awt.*;
+import java.io.File;
 import java.util.List;
 
 public class MultiBranchConfirmDialog extends DialogWrapper {
@@ -82,9 +83,13 @@ public class MultiBranchConfirmDialog extends DialogWrapper {
         gbc.gridx = 1;
         gbc.weightx = 1.0;
         gbc.fill = GridBagConstraints.HORIZONTAL;
-        JLabel msgLbl = new JLabel(config.getFormattedCommitMessage());
-        msgLbl.setFont(msgLbl.getFont().deriveFont(Font.BOLD));
-        metaBox.add(msgLbl, gbc);
+        JTextArea msgArea = new JTextArea(config.getFormattedCommitMessage());
+        msgArea.setEditable(false);
+        msgArea.setOpaque(false);
+        msgArea.setFont(msgArea.getFont().deriveFont(Font.BOLD));
+        msgArea.setLineWrap(true);
+        msgArea.setWrapStyleWord(true);
+        metaBox.add(msgArea, gbc);
 
         contentPanel.add(metaBox);
         contentPanel.add(Box.createVerticalStrut(JBUI.scale(8)));
@@ -96,18 +101,23 @@ public class MultiBranchConfirmDialog extends DialogWrapper {
 
         List<BranchMapping> mappings = config.getBranchMappings();
         int activeCount = 0;
+        File repoDir = (repository != null && repository.getRoot() != null) ? new File(repository.getRoot().getPath()) : null;
+
         for (BranchMapping mapping : mappings) {
             if (!mapping.isEnabled()) continue;
             activeCount++;
 
             String localBranch = mapping.getLocalBranchName(config.getTaskPrefix());
+            MultiBranchService.BranchStartPoint startPoint = MultiBranchService.resolveBranchStartPoint(repoDir, localBranch, mapping.getSourceOriginBranch());
+
             JPanel card = new JPanel(new BorderLayout(JBUI.scale(6), JBUI.scale(2)));
             card.setBorder(BorderFactory.createCompoundBorder(
                     BorderFactory.createMatteBorder(0, 0, 1, 0, JBUI.CurrentTheme.CustomFrameDecorations.separatorForeground()),
                     JBUI.Borders.empty(6, 4)
             ));
 
-            String title = "● Branch: " + localBranch + " (Source: " + mapping.getSourceOriginBranch() + " ➔ Target: " + mapping.getTargetOriginBranchName() + ")";
+            String statusTag = startPoint.isExisting() ? "[UPDATING EXISTING] " : "[NEW BRANCH] ";
+            String title = "● Branch: " + localBranch + " " + statusTag + "(Start: " + startPoint.getRef() + " ➔ Target: " + mapping.getTargetOriginBranchName() + ")";
             JLabel cardTitle = new JLabel(title);
             cardTitle.setFont(cardTitle.getFont().deriveFont(Font.BOLD));
             card.add(cardTitle, BorderLayout.NORTH);
@@ -115,17 +125,21 @@ public class MultiBranchConfirmDialog extends DialogWrapper {
             JPanel stepsPanel = new JPanel(new GridLayout(0, 1, 0, JBUI.scale(2)));
             stepsPanel.setBorder(JBUI.Borders.emptyLeft(12));
 
-            stepsPanel.add(new JLabel("1. Checkout isolated worktree from " + mapping.getSourceOriginBranch() + " as " + localBranch));
+            if (startPoint.isExisting()) {
+                stepsPanel.add(new JLabel("1. Checkout isolated worktree from " + startPoint.getRef() + " as " + localBranch + " (fast-forward update)"));
+            } else {
+                stepsPanel.add(new JLabel("1. Checkout isolated worktree from " + mapping.getSourceOriginBranch() + " as " + localBranch));
+            }
             stepsPanel.add(new JLabel("2. Apply patch from changelist '" + config.getChangelistName() + "' & commit"));
 
             if (config.isPushAfterCommit()) {
-                stepsPanel.add(new JLabel("3. Push " + localBranch + " to origin (check behind-remote status)"));
+                stepsPanel.add(new JLabel("3. Push " + localBranch + " to origin (fast-forward, check behind-remote status)"));
             } else {
                 stepsPanel.add(new JLabel("3. Skip push (local branch only)"));
             }
 
             if (config.isGenerateMrLinks()) {
-                stepsPanel.add(new JLabel("4. Create GitLab Merge Request: " + localBranch + " ➔ " + mapping.getTargetOriginBranchName()));
+                stepsPanel.add(new JLabel("4. GitLab Merge Request: " + localBranch + " ➔ " + mapping.getTargetOriginBranchName() + " (create or reuse open MR)"));
             }
 
             card.add(stepsPanel, BorderLayout.CENTER);

@@ -3,7 +3,10 @@ package git.multibranch;
 import org.junit.jupiter.api.Test;
 
 import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -653,4 +656,279 @@ public class BranchSettingsTest {
         assertEquals("1.2.0", MultiBranchReloadAction.getVersionFromZip(new File("/path/to/git-multibranch-plugin-1.2.0.zip")));
         assertNull(MultiBranchReloadAction.getVersionFromZip(new File("unknown-file.zip")));
     }
+
+    @Test
+    public void testExtractPrefixAndMessage() {
+        // 1. Bracketed prefix
+        MultiBranchCommitDialog.ParsedCommitMessage p1 = MultiBranchCommitDialog.extractPrefixAndMessage("[ABC-123] Fix login error");
+        assertEquals("ABC-123", p1.getPrefix());
+        assertEquals("Fix login error", p1.getMessage());
+
+        // Bracketed prefix multiline
+        MultiBranchCommitDialog.ParsedCommitMessage p2 = MultiBranchCommitDialog.extractPrefixAndMessage("[ABC-123] Fix login error\n\nDetailed notes:\n- bullet 1");
+        assertEquals("ABC-123", p2.getPrefix());
+        assertEquals("Fix login error\n\nDetailed notes:\n- bullet 1", p2.getMessage());
+
+        // Bracketed prefix only
+        MultiBranchCommitDialog.ParsedCommitMessage p3 = MultiBranchCommitDialog.extractPrefixAndMessage("[ABC-123]");
+        assertEquals("ABC-123", p3.getPrefix());
+        assertEquals("", p3.getMessage());
+
+        // 2. Issue key with colon
+        MultiBranchCommitDialog.ParsedCommitMessage p4 = MultiBranchCommitDialog.extractPrefixAndMessage("ABC-123: Fix login error");
+        assertEquals("ABC-123", p4.getPrefix());
+        assertEquals("Fix login error", p4.getMessage());
+
+        // 3. Issue key with dash
+        MultiBranchCommitDialog.ParsedCommitMessage p5 = MultiBranchCommitDialog.extractPrefixAndMessage("ABC-123 - Fix login error");
+        assertEquals("ABC-123", p5.getPrefix());
+        assertEquals("Fix login error", p5.getMessage());
+
+        // 4. Issue key with space
+        MultiBranchCommitDialog.ParsedCommitMessage p6 = MultiBranchCommitDialog.extractPrefixAndMessage("ABC-123 Fix login error");
+        assertEquals("ABC-123", p6.getPrefix());
+        assertEquals("Fix login error", p6.getMessage());
+
+        // 5. Issue key only
+        MultiBranchCommitDialog.ParsedCommitMessage p7 = MultiBranchCommitDialog.extractPrefixAndMessage("ABC-123");
+        assertEquals("ABC-123", p7.getPrefix());
+        assertEquals("", p7.getMessage());
+
+        // 6. Generic token with colon
+        MultiBranchCommitDialog.ParsedCommitMessage p8 = MultiBranchCommitDialog.extractPrefixAndMessage("feat-auth: Fix login error");
+        assertEquals("feat-auth", p8.getPrefix());
+        assertEquals("Fix login error", p8.getMessage());
+
+        // 7. Plain message without prefix
+        MultiBranchCommitDialog.ParsedCommitMessage p9 = MultiBranchCommitDialog.extractPrefixAndMessage("Fix login error without any prefix");
+        assertEquals("", p9.getPrefix());
+        assertEquals("Fix login error without any prefix", p9.getMessage());
+
+        // 8. Null / blank
+        MultiBranchCommitDialog.ParsedCommitMessage p10 = MultiBranchCommitDialog.extractPrefixAndMessage("");
+        assertEquals("", p10.getPrefix());
+        assertEquals("", p10.getMessage());
+    }
+
+    @Test
+    public void testCleanCommitMessage() {
+        assertEquals("My message", MultiBranchCommitDialog.cleanCommitMessage("[TASK-100] My message", "TASK-100"));
+        assertEquals("My message", MultiBranchCommitDialog.cleanCommitMessage("[task-100] My message", "TASK-100"));
+        assertEquals("My message", MultiBranchCommitDialog.cleanCommitMessage("[TASK-100] My message", "[TASK-100]"));
+        assertEquals("My message", MultiBranchCommitDialog.cleanCommitMessage("TASK-100: My message", "TASK-100"));
+        assertEquals("My message", MultiBranchCommitDialog.cleanCommitMessage("TASK-100 - My message", "TASK-100"));
+        assertEquals("My message", MultiBranchCommitDialog.cleanCommitMessage("TASK-100 My message", "TASK-100"));
+        assertEquals("My message", MultiBranchCommitDialog.cleanCommitMessage("[OTHER-200] My message", "TASK-100"));
+        assertEquals("Line 1\n\nLine 2", MultiBranchCommitDialog.cleanCommitMessage("[TASK-100] Line 1\n\nLine 2", "TASK-100"));
+        assertEquals("", MultiBranchCommitDialog.cleanCommitMessage("[TASK-100]", "TASK-100"));
+        assertEquals("Fix bug", MultiBranchCommitDialog.cleanCommitMessage("Fix bug", "TASK-100"));
+    }
+
+    @Test
+    public void testMatchesPrefix() {
+        assertTrue(MultiBranchCommitDialog.matchesPrefix("[TASK-100] Fix", "TASK-100"));
+        assertTrue(MultiBranchCommitDialog.matchesPrefix("[task-100] Fix", "TASK-100"));
+        assertTrue(MultiBranchCommitDialog.matchesPrefix("TASK-100: Fix", "TASK-100"));
+        assertTrue(MultiBranchCommitDialog.matchesPrefix("TASK-100 - Fix", "TASK-100"));
+        assertTrue(MultiBranchCommitDialog.matchesPrefix("TASK-100 Fix", "TASK-100"));
+        assertTrue(MultiBranchCommitDialog.matchesPrefix("Fix for TASK-100", "TASK-100"));
+        assertFalse(MultiBranchCommitDialog.matchesPrefix("[TASK-1000] Fix", "TASK-100"));
+        assertFalse(MultiBranchCommitDialog.matchesPrefix("[OTHER-50] Fix", "TASK-100"));
+    }
+
+    @Test
+    public void testFindLatestCommitMessageForPrefix() {
+        List<String> history = List.of(
+                "[TASK-100] First commit for 100",
+                "[OTHER-999] Unrelated commit",
+                "[TASK-100] Second commit for 100: multiline\n\n- Details",
+                "[TASK-200] Commit for 200"
+        );
+
+        String msg = MultiBranchCommitDialog.findLatestCommitMessageForPrefix(history, "TASK-100");
+        assertEquals("Second commit for 100: multiline\n\n- Details", msg);
+
+        String notFound = MultiBranchCommitDialog.findLatestCommitMessageForPrefix(history, "NON-EXISTENT");
+        assertEquals("", notFound);
+    }
+
+    @Test
+    public void testSortRecentMessagesLatestTop() {
+        List<String> rawMessages = List.of(
+                "First commit (oldest)",
+                "Second commit",
+                "Third commit",
+                "Second commit"
+        );
+
+        List<String> sorted = MultiBranchCommitDialog.sortRecentMessagesLatestTop(rawMessages);
+        assertEquals(3, sorted.size());
+        assertEquals("Second commit", sorted.get(0)); // latest occurrence on top
+        assertEquals("Third commit", sorted.get(1));
+        assertEquals("First commit (oldest)", sorted.get(2)); // oldest at bottom
+
+        assertTrue(MultiBranchCommitDialog.sortRecentMessagesLatestTop(null).isEmpty());
+        assertTrue(MultiBranchCommitDialog.sortRecentMessagesLatestTop(List.of()).isEmpty());
+    }
+
+    @Test
+    public void testResolveInitialCommitInfoOnPrefixedBranch() {
+        BranchMapping mapping = new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true);
+        MultiBranchCommitAction.BranchDetectionResult detection =
+                new MultiBranchCommitAction.BranchDetectionResult("TASK-101-dev", "TASK-101", true, mapping);
+
+        List<String> history = List.of(
+                "[TASK-101] Initial work on auth",
+                "[TASK-999] Unrelated work",
+                "[TASK-101] Fix NPE in login controller\n\nRefactored token handler"
+        );
+
+        MultiBranchCommitDialog.InitialCommitInfo info =
+                MultiBranchCommitDialog.resolveInitialCommitInfo(detection, "SOME-OTHER-PREFIX", history);
+
+        assertEquals("TASK-101", info.getPrefix());
+        assertEquals("Fix NPE in login controller\n\nRefactored token handler", info.getCommitMessage());
+
+        // On prefixed branch, but no history for that prefix
+        MultiBranchCommitAction.BranchDetectionResult newBranchDetection =
+                new MultiBranchCommitAction.BranchDetectionResult("BRAND-NEW-dev", "BRAND-NEW", true, mapping);
+
+        MultiBranchCommitDialog.InitialCommitInfo newInfo =
+                MultiBranchCommitDialog.resolveInitialCommitInfo(newBranchDetection, "SOME-OTHER-PREFIX", history);
+
+        assertEquals("BRAND-NEW", newInfo.getPrefix());
+        assertEquals("", newInfo.getCommitMessage());
+    }
+
+    @Test
+    public void testResolveInitialCommitInfoNotOnPrefixedBranch() {
+        // Not on a prefix branch (e.g. on main, master, or deploy/test)
+        MultiBranchCommitAction.BranchDetectionResult detectionMain =
+                new MultiBranchCommitAction.BranchDetectionResult("main", "", false, null);
+
+        List<String> history = List.of(
+                "[TASK-100] First commit",
+                "[TASK-101] Fix NPE in auth",
+                "[TASK-102] Add CSV export feature\n\nIncluded tests and docs"
+        );
+
+        // Init prefix and commit message from latest in history
+        MultiBranchCommitDialog.InitialCommitInfo info =
+                MultiBranchCommitDialog.resolveInitialCommitInfo(detectionMain, "FALLBACK-PREFIX", history);
+
+        assertEquals("TASK-102", info.getPrefix());
+        assertEquals("Add CSV export feature\n\nIncluded tests and docs", info.getCommitMessage());
+
+        // Latest in history has no prefix in message text: extracts message, prefix from earlier history
+        List<String> historyNoPrefixInLatest = List.of(
+                "[TASK-200] Refactor database schema",
+                "Fix documentation typos"
+        );
+        MultiBranchCommitDialog.InitialCommitInfo info2 =
+                MultiBranchCommitDialog.resolveInitialCommitInfo(detectionMain, "FALLBACK-PREFIX", historyNoPrefixInLatest);
+        assertEquals("TASK-200", info2.getPrefix());
+        assertEquals("Fix documentation typos", info2.getCommitMessage());
+
+        // History empty: fallback to lastTaskPrefix
+        MultiBranchCommitDialog.InitialCommitInfo infoEmptyHistory =
+                MultiBranchCommitDialog.resolveInitialCommitInfo(detectionMain, "SAVED-PREFIX", List.of());
+        assertEquals("SAVED-PREFIX", infoEmptyHistory.getPrefix());
+        assertEquals("", infoEmptyHistory.getCommitMessage());
+    }
+
+    @Test
+    public void testResolveBranchStartPointNullOrBlank() {
+        MultiBranchService.BranchStartPoint sp1 = MultiBranchService.resolveBranchStartPoint(null, null, "origin/deploy/dev");
+        assertEquals("origin/deploy/dev", sp1.getRef());
+        assertFalse(sp1.isExisting());
+
+        MultiBranchService.BranchStartPoint sp2 = MultiBranchService.resolveBranchStartPoint(null, "TASK-1", "origin/deploy/dev");
+        assertEquals("origin/deploy/dev", sp2.getRef());
+        assertFalse(sp2.isExisting());
+
+        MultiBranchService.BranchStartPoint sp3 = MultiBranchService.resolveBranchStartPoint(new File("non-existent"), "TASK-1", "origin/deploy/dev");
+        assertEquals("origin/deploy/dev", sp3.getRef());
+        assertFalse(sp3.isExisting());
+    }
+
+    @Test
+    public void testResolveBranchStartPointWithRealGitRepo() throws Exception {
+        Path tempDir = Files.createTempDirectory("git_startpoint_test_");
+        File repo = tempDir.toFile();
+        try {
+            // git init
+            MultiBranchService.runGit(repo, "init");
+            MultiBranchService.runGit(repo, "config", "user.name", "Test User");
+            MultiBranchService.runGit(repo, "config", "user.email", "test@example.com");
+
+            // Base commit on deploy/dev
+            File f = new File(repo, "file.txt");
+            Files.writeString(f.toPath(), "base content");
+            MultiBranchService.runGit(repo, "add", "file.txt");
+            MultiBranchService.runGit(repo, "commit", "-m", "Initial commit on deploy/dev");
+            MultiBranchService.runGit(repo, "branch", "-M", "deploy/dev");
+
+            // Simulate remote tracking branch origin/deploy/dev
+            MultiBranchService.runGit(repo, "update-ref", "refs/remotes/origin/deploy/dev", "HEAD");
+
+            // Case 1: Brand new branch (never committed or pushed)
+            MultiBranchService.BranchStartPoint sp1 = MultiBranchService.resolveBranchStartPoint(repo, "TASK-101-dev", "origin/deploy/dev");
+            assertEquals("origin/deploy/dev", sp1.getRef());
+            assertFalse(sp1.isExisting());
+
+            // Case 2: Unmerged branch on remote (simulate origin/TASK-101-dev with a commit not in deploy/dev)
+            MultiBranchService.runGit(repo, "checkout", "-b", "temp-feature");
+            Files.writeString(f.toPath(), "feature content");
+            MultiBranchService.runGit(repo, "commit", "-am", "TASK-101 commit 1");
+            MultiBranchService.runGit(repo, "update-ref", "refs/remotes/origin/TASK-101-dev", "HEAD");
+            MultiBranchService.runGit(repo, "checkout", "deploy/dev");
+            MultiBranchService.runGit(repo, "branch", "-D", "temp-feature");
+
+            // Now origin/TASK-101-dev exists and has unmerged commit!
+            MultiBranchService.BranchStartPoint sp2 = MultiBranchService.resolveBranchStartPoint(repo, "TASK-101-dev", "origin/deploy/dev");
+            assertEquals("origin/TASK-101-dev", sp2.getRef());
+            assertTrue(sp2.isExisting());
+
+            // Case 3: Local branch is ahead of remote
+            MultiBranchService.runGit(repo, "checkout", "-b", "TASK-101-dev", "origin/TASK-101-dev");
+            Files.writeString(f.toPath(), "local ahead content");
+            MultiBranchService.runGit(repo, "commit", "-am", "TASK-101 commit 2 (local only)");
+            MultiBranchService.runGit(repo, "checkout", "deploy/dev");
+
+            MultiBranchService.BranchStartPoint sp3 = MultiBranchService.resolveBranchStartPoint(repo, "TASK-101-dev", "origin/deploy/dev");
+            assertEquals("TASK-101-dev", sp3.getRef());
+            assertTrue(sp3.isExisting());
+
+            // Case 4: Remote branch was already merged into deploy/dev
+            // Fast-forward deploy/dev to include origin/TASK-101-dev
+            MultiBranchService.runGit(repo, "checkout", "deploy/dev");
+            MultiBranchService.runGit(repo, "merge", "--ff-only", "origin/TASK-101-dev");
+            MultiBranchService.runGit(repo, "update-ref", "refs/remotes/origin/deploy/dev", "HEAD");
+            MultiBranchService.runGit(repo, "branch", "-D", "TASK-101-dev");
+
+            // origin/TASK-101-dev is now fully merged into origin/deploy/dev
+            MultiBranchService.BranchStartPoint sp4 = MultiBranchService.resolveBranchStartPoint(repo, "TASK-101-dev", "origin/deploy/dev");
+            assertEquals("origin/deploy/dev", sp4.getRef());
+            assertFalse(sp4.isExisting());
+
+            // Case 5: Local branch only with unmerged commits (never pushed to remote)
+            MultiBranchService.runGit(repo, "checkout", "-b", "TASK-202-dev");
+            Files.writeString(f.toPath(), "local task 202 content");
+            MultiBranchService.runGit(repo, "commit", "-am", "TASK-202 local commit");
+            MultiBranchService.runGit(repo, "checkout", "deploy/dev");
+
+            MultiBranchService.BranchStartPoint sp5 = MultiBranchService.resolveBranchStartPoint(repo, "TASK-202-dev", "origin/deploy/dev");
+            assertEquals("TASK-202-dev", sp5.getRef());
+            assertTrue(sp5.isExisting());
+
+        } finally {
+            // Cleanup temp repo
+            try (var stream = Files.walk(tempDir)) {
+                stream.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+            } catch (Exception ignored) {}
+        }
+    }
 }
+
+
+

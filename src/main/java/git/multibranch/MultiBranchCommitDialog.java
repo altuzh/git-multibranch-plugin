@@ -28,9 +28,14 @@ import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 public class MultiBranchCommitDialog extends DialogWrapper {
     private final Project project;
@@ -54,6 +59,294 @@ public class MultiBranchCommitDialog extends DialogWrapper {
     private JBCheckBox stashCheckbox;
     private JBCheckBox checkoutTestCheckbox;
 
+    public static class InitialCommitInfo {
+        private final String prefix;
+        private final String commitMessage;
+
+        public InitialCommitInfo(String prefix, String commitMessage) {
+            this.prefix = prefix != null ? prefix : "";
+            this.commitMessage = commitMessage != null ? commitMessage : "";
+        }
+
+        public String getPrefix() { return prefix; }
+        public String getCommitMessage() { return commitMessage; }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            InitialCommitInfo that = (InitialCommitInfo) o;
+            return Objects.equals(prefix, that.prefix) && Objects.equals(commitMessage, that.commitMessage);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(prefix, commitMessage);
+        }
+
+        @Override
+        public String toString() {
+            return "InitialCommitInfo{prefix='" + prefix + "', commitMessage='" + commitMessage + "'}";
+        }
+    }
+
+    public static class ParsedCommitMessage {
+        private final String prefix;
+        private final String message;
+
+        public ParsedCommitMessage(String prefix, String message) {
+            this.prefix = prefix != null ? prefix.trim() : "";
+            this.message = message != null ? message.trim() : "";
+        }
+
+        public String getPrefix() { return prefix; }
+        public String getMessage() { return message; }
+    }
+
+    public static ParsedCommitMessage extractPrefixAndMessage(@Nullable String raw) {
+        if (raw == null || raw.isBlank()) {
+            return new ParsedCommitMessage("", "");
+        }
+        String text = raw.trim();
+
+        // 1. Bracketed prefix: [PREFIX] message
+        Matcher bracketMatcher = Pattern.compile("^\\[([^\\]\\r\\n]+)\\]\\s*(.*)$", Pattern.DOTALL).matcher(text);
+        if (bracketMatcher.find()) {
+            String p = bracketMatcher.group(1).trim();
+            String m = bracketMatcher.group(2).trim();
+            return new ParsedCommitMessage(p, m);
+        }
+
+        // 2. Issue key prefix with colon/dash: ABC-123: message or ABC-123 - message
+        Matcher keySepMatcher = Pattern.compile("^([A-Za-z]+-[0-9]+)\\s*[:\\-]\\s*(.*)$", Pattern.DOTALL).matcher(text);
+        if (keySepMatcher.find()) {
+            String p = keySepMatcher.group(1).trim();
+            String m = keySepMatcher.group(2).trim();
+            return new ParsedCommitMessage(p, m);
+        }
+
+        // 3. Issue key prefix with whitespace: ABC-123 message
+        Matcher keySpaceMatcher = Pattern.compile("^([A-Za-z]+-[0-9]+)\\s+(.*)$", Pattern.DOTALL).matcher(text);
+        if (keySpaceMatcher.find()) {
+            String p = keySpaceMatcher.group(1).trim();
+            String m = keySpaceMatcher.group(2).trim();
+            return new ParsedCommitMessage(p, m);
+        }
+
+        // 4. Issue key alone: ABC-123
+        Matcher keyOnlyMatcher = Pattern.compile("^([A-Za-z]+-[0-9]+)$").matcher(text);
+        if (keyOnlyMatcher.find()) {
+            return new ParsedCommitMessage(keyOnlyMatcher.group(1).trim(), "");
+        }
+
+        // 5. Generic token with colon: feat-login: message
+        Matcher tokenColonMatcher = Pattern.compile("^([A-Za-z0-9_-]+)\\s*:\\s+(.*)$", Pattern.DOTALL).matcher(text);
+        if (tokenColonMatcher.find()) {
+            String p = tokenColonMatcher.group(1).trim();
+            String m = tokenColonMatcher.group(2).trim();
+            return new ParsedCommitMessage(p, m);
+        }
+
+        // 6. No prefix recognized at start
+        return new ParsedCommitMessage("", text);
+    }
+
+    public static String cleanCommitMessage(@Nullable String rawMsg, @Nullable String currentPrefix) {
+        if (rawMsg == null || rawMsg.isBlank()) {
+            return "";
+        }
+        String msg = rawMsg.trim();
+
+        // If currentPrefix is provided, try stripping it first
+        if (currentPrefix != null && !currentPrefix.isBlank()) {
+            String cp = currentPrefix.trim().replaceAll("^\\[|\\]$", "").trim();
+            if (!cp.isEmpty()) {
+                if (msg.equalsIgnoreCase(cp) || msg.equalsIgnoreCase("[" + cp + "]")) {
+                    return "";
+                }
+                Pattern bracketP = Pattern.compile("^\\[" + Pattern.quote(cp) + "\\]\\s*", Pattern.CASE_INSENSITIVE);
+                Matcher m = bracketP.matcher(msg);
+                if (m.find()) {
+                    return msg.substring(m.end()).trim();
+                }
+                Pattern sepP = Pattern.compile("^" + Pattern.quote(cp) + "(?:\\s*[:\\-]\\s*|\\s+)", Pattern.CASE_INSENSITIVE);
+                m = sepP.matcher(msg);
+                if (m.find()) {
+                    return msg.substring(m.end()).trim();
+                }
+            }
+        }
+
+        // If message starts with any bracketed tag [TAG], strip it
+        Matcher bracketMatcher = Pattern.compile("^\\[[^\\]\\r\\n]+\\]\\s*", Pattern.DOTALL).matcher(msg);
+        if (bracketMatcher.find()) {
+            String stripped = msg.substring(bracketMatcher.end()).trim();
+            if (!stripped.isEmpty()) {
+                return stripped;
+            }
+        }
+
+        // If message starts with standard issue key like ABC-123: or ABC-123 - or ABC-123 space
+        Matcher keyMatcher = Pattern.compile("^[A-Za-z]+-[0-9]+(?:\\s*[:\\-]\\s*|\\s+)", Pattern.DOTALL).matcher(msg);
+        if (keyMatcher.find()) {
+            String stripped = msg.substring(keyMatcher.end()).trim();
+            if (!stripped.isEmpty()) {
+                return stripped;
+            }
+        }
+
+        return msg;
+    }
+
+    public static boolean matchesPrefix(@Nullable String message, @Nullable String prefix) {
+        if (message == null || message.isBlank() || prefix == null || prefix.isBlank()) {
+            return false;
+        }
+        String cleanPrefix = prefix.trim().replaceAll("^\\[|\\]$", "").trim();
+        if (cleanPrefix.isEmpty()) {
+            return false;
+        }
+        String trimmed = message.trim();
+        Pattern bracketPattern = Pattern.compile("^\\[" + Pattern.quote(cleanPrefix) + "\\]", Pattern.CASE_INSENSITIVE);
+        if (bracketPattern.matcher(trimmed).find()) {
+            return true;
+        }
+        Pattern sepPattern = Pattern.compile("^" + Pattern.quote(cleanPrefix) + "(?:\\s*[:\\-]\\s*|\\s+|$)", Pattern.CASE_INSENSITIVE);
+        if (sepPattern.matcher(trimmed).find()) {
+            return true;
+        }
+        return MultiBranchConfig.isPrefixAlreadyInMessage(trimmed, cleanPrefix);
+    }
+
+    public static String findLatestCommitMessageForPrefix(@Nullable List<String> historyMessages, @Nullable String prefix) {
+        if (historyMessages == null || historyMessages.isEmpty() || prefix == null || prefix.isBlank()) {
+            return "";
+        }
+        String cleanPrefix = prefix.trim().replaceAll("^\\[|\\]$", "").trim();
+        if (cleanPrefix.isEmpty()) {
+            return "";
+        }
+        for (int i = historyMessages.size() - 1; i >= 0; i--) {
+            String m = historyMessages.get(i);
+            if (m != null && !m.isBlank() && matchesPrefix(m, cleanPrefix)) {
+                return cleanCommitMessage(m, cleanPrefix);
+            }
+        }
+        return "";
+    }
+
+    public static List<String> sortRecentMessagesLatestTop(@Nullable List<String> rawMessages) {
+        if (rawMessages == null || rawMessages.isEmpty()) {
+            return Collections.emptyList();
+        }
+        List<String> sorted = new ArrayList<>();
+        for (int i = rawMessages.size() - 1; i >= 0; i--) {
+            String m = rawMessages.get(i);
+            if (m != null && !m.isBlank()) {
+                String trimmed = m.trim();
+                if (!sorted.contains(trimmed)) {
+                    sorted.add(trimmed);
+                }
+            }
+        }
+        return sorted;
+    }
+
+    public static InitialCommitInfo resolveInitialCommitInfo(
+            @Nullable MultiBranchCommitAction.BranchDetectionResult detection,
+            @Nullable String lastTaskPrefix,
+            @Nullable List<String> historyMessages) {
+
+        boolean onPrefixBranch = detection != null
+                && detection.isOnDesignatedBranch()
+                && detection.getDetectedPrefix() != null
+                && !detection.getDetectedPrefix().isBlank();
+
+        if (onPrefixBranch) {
+            String prefix = detection.getDetectedPrefix().trim();
+            String commitMsg = findLatestCommitMessageForPrefix(historyMessages, prefix);
+            return new InitialCommitInfo(prefix, commitMsg);
+        } else {
+            // Not on a prefix branch (one from preconfigured branches)
+            // Init prefix and commit message from latest in history
+            String prefix = "";
+            String commitMsg = "";
+
+            if (historyMessages != null && !historyMessages.isEmpty()) {
+                // Find latest non-empty message in history
+                for (int i = historyMessages.size() - 1; i >= 0; i--) {
+                    String raw = historyMessages.get(i);
+                    if (raw != null && !raw.isBlank()) {
+                        ParsedCommitMessage parsed = extractPrefixAndMessage(raw);
+                        commitMsg = parsed.getMessage();
+                        prefix = parsed.getPrefix();
+                        break;
+                    }
+                }
+
+                // If latest message didn't specify a prefix, search history for most recent prefix
+                if (prefix.isBlank()) {
+                    for (int i = historyMessages.size() - 1; i >= 0; i--) {
+                        String raw = historyMessages.get(i);
+                        if (raw != null && !raw.isBlank()) {
+                            ParsedCommitMessage parsed = extractPrefixAndMessage(raw);
+                            if (!parsed.getPrefix().isBlank()) {
+                                prefix = parsed.getPrefix();
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Fallback for prefix if history had none
+            if (prefix.isBlank()) {
+                if (lastTaskPrefix != null && !lastTaskPrefix.isBlank()) {
+                    prefix = lastTaskPrefix.trim();
+                } else if (detection != null && !detection.getDetectedPrefix().isBlank()) {
+                    prefix = detection.getDetectedPrefix().trim();
+                }
+            }
+
+            return new InitialCommitInfo(prefix, commitMsg);
+        }
+    }
+
+    public static List<String> getCommitMessageHistory(@Nullable Project project) {
+        if (project == null) return Collections.emptyList();
+        try {
+            VcsConfiguration vcsConfig = VcsConfiguration.getInstance(project);
+            if (vcsConfig != null) {
+                List<String> messages = vcsConfig.getRecentMessages();
+                if (messages != null && !messages.isEmpty()) {
+                    return new ArrayList<>(messages);
+                }
+            }
+        } catch (Exception ignored) {}
+
+        try {
+            Collection<GitRepository> repos = GitRepositoryManager.getInstance(project).getRepositories();
+            if (!repos.isEmpty()) {
+                GitRepository repo = repos.iterator().next();
+                File repoDir = new File(repo.getRoot().getPath());
+                MultiBranchService.GitResult res = MultiBranchService.runGit(repoDir, "log", "-n", "30", "--pretty=format:%B%x1e");
+                if (res.exitCode == 0 && !res.stdout.isBlank()) {
+                    String[] entries = res.stdout.split("\u001e");
+                    List<String> list = new ArrayList<>();
+                    for (String entry : entries) {
+                        if (entry != null && !entry.isBlank()) {
+                            list.add(entry.trim());
+                        }
+                    }
+                    Collections.reverse(list);
+                    return list;
+                }
+            }
+        } catch (Exception ignored) {}
+
+        return Collections.emptyList();
+    }
+
     public MultiBranchCommitDialog(@Nullable Project project, MultiBranchConfig initialConfig, String defaultPrefix) {
         this(project, initialConfig, defaultPrefix, null);
     }
@@ -63,14 +356,21 @@ public class MultiBranchCommitDialog extends DialogWrapper {
         this.project = project;
         this.config = initialConfig;
         this.detection = detection;
-        if (defaultPrefix != null && !defaultPrefix.isBlank()) {
+
+        MultiBranchSettings settings = project != null ? MultiBranchSettings.getInstance(project) : null;
+        String lastTaskPrefix = (settings != null && settings.getState().lastTaskPrefix != null) ? settings.getState().lastTaskPrefix : "";
+        List<String> history = getCommitMessageHistory(project);
+
+        InitialCommitInfo initialInfo = resolveInitialCommitInfo(detection, lastTaskPrefix, history);
+        if (initialInfo.getPrefix() != null && !initialInfo.getPrefix().isBlank()) {
+            config.setTaskPrefix(initialInfo.getPrefix());
+        } else if (defaultPrefix != null && !defaultPrefix.isBlank()) {
             config.setTaskPrefix(defaultPrefix);
-        } else if ((config.getTaskPrefix() == null || config.getTaskPrefix().isBlank()) && project != null) {
-            MultiBranchSettings settings = MultiBranchSettings.getInstance(project);
-            if (settings != null && settings.getState().lastTaskPrefix != null && !settings.getState().lastTaskPrefix.isBlank()) {
-                config.setTaskPrefix(settings.getState().lastTaskPrefix);
-            }
         }
+        if (initialInfo.getCommitMessage() != null) {
+            config.setCommitMessage(initialInfo.getCommitMessage());
+        }
+
         setTitle("Multi-Branch Commit & Push (v" + MultiBranchReloadAction.getRunningVersion() + ")");
         init();
     }
@@ -94,6 +394,9 @@ public class MultiBranchCommitDialog extends DialogWrapper {
 
         // 2. Commit Message
         gbc.gridy++;
+        gbc.fill = GridBagConstraints.BOTH;
+        gbc.weighty = 0.5;
+
         JPanel msgPanel = new JPanel(new BorderLayout(0, JBUI.scale(4)));
         JPanel msgHeader = new JPanel(new BorderLayout());
         msgHeader.add(new JBLabel("Commit Message:"), BorderLayout.WEST);
@@ -105,7 +408,7 @@ public class MultiBranchCommitDialog extends DialogWrapper {
         msgHeader.add(historyBtn, BorderLayout.EAST);
         msgPanel.add(msgHeader, BorderLayout.NORTH);
 
-        messageArea = new JBTextArea(config.getCommitMessage(), 3, 50);
+        messageArea = new JBTextArea(config.getCommitMessage(), 6, 50);
         messageArea.setLineWrap(true);
         messageArea.setWrapStyleWord(true);
 
@@ -118,11 +421,29 @@ public class MultiBranchCommitDialog extends DialogWrapper {
             }
         });
 
-        msgPanel.add(new JBScrollPane(messageArea), BorderLayout.CENTER);
+        // Register Ctrl+Enter / Cmd+Enter to commit
+        messageArea.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.CTRL_DOWN_MASK), "submitCommit");
+        messageArea.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.META_DOWN_MASK), "submitCommit");
+        messageArea.getActionMap().put("submitCommit", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                if (getOKAction().isEnabled()) {
+                    doOKAction();
+                }
+            }
+        });
+
+        JBScrollPane msgScrollPane = new JBScrollPane(messageArea);
+        msgScrollPane.setPreferredSize(new Dimension(JBUI.scale(620), JBUI.scale(120)));
+        msgScrollPane.setMinimumSize(new Dimension(JBUI.scale(400), JBUI.scale(90)));
+        msgPanel.add(msgScrollPane, BorderLayout.CENTER);
 
         prefixMessageCheckbox = new JBCheckBox("Prepend prefix as [PREFIX] to commit message", config.isPrefixMessageWithTask());
         msgPanel.add(prefixMessageCheckbox, BorderLayout.SOUTH);
         root.add(msgPanel, gbc);
+
+        gbc.weighty = 0.0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
 
         // 3. Changelist selection
         gbc.gridy++;
@@ -248,7 +569,7 @@ public class MultiBranchCommitDialog extends DialogWrapper {
             public void changedUpdate(DocumentEvent e) { updateBranchPreviews(); }
         });
 
-        root.setPreferredSize(new Dimension(JBUI.scale(660), JBUI.scale(500)));
+        root.setPreferredSize(new Dimension(JBUI.scale(680), JBUI.scale(580)));
         return root;
     }
 
@@ -301,21 +622,22 @@ public class MultiBranchCommitDialog extends DialogWrapper {
             JPanel row = new JPanel(new BorderLayout(JBUI.scale(8), 0));
             JPanel leftPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, JBUI.scale(6), 0));
 
-            JCheckBox cb = new JCheckBox("From " + mapping.getSourceOriginBranch(), mapping.isEnabled());
-            cb.addActionListener(e -> mapping.setEnabled(cb.isSelected()));
-
-            leftPanel.add(cb);
-
             String localBranch = mapping.getLocalBranchName(currentPrefix);
             boolean isCurrent = !curBranch.isEmpty() && curBranch.equalsIgnoreCase(localBranch);
             boolean onRemote = isRemoteBranchPresent(localBranch);
+
+            String cbLabel = onRemote ? "Update origin/" + localBranch : "From " + mapping.getSourceOriginBranch();
+            JCheckBox cb = new JCheckBox(cbLabel, mapping.isEnabled());
+            cb.addActionListener(e -> mapping.setEnabled(cb.isSelected()));
+
+            leftPanel.add(cb);
 
             String previewText = "➔ " + localBranch + " (Merge target: " + mapping.getTargetOriginBranchName() + ")";
             if (isCurrent) {
                 previewText += "  [CURRENT BRANCH]";
             }
             if (onRemote) {
-                previewText += "  [ON REMOTE]";
+                previewText += "  [ON REMOTE - UPDATING]";
             }
             JLabel preview = new JLabel(previewText);
             if (isCurrent) {
@@ -339,23 +661,40 @@ public class MultiBranchCommitDialog extends DialogWrapper {
 
     private void showRecentMessagesPopup(Component anchor) {
         if (project == null) return;
-        List<String> messages = VcsConfiguration.getInstance(project).getRecentMessages();
-        if (messages == null || messages.isEmpty()) {
+        List<String> rawMessages = getCommitMessageHistory(project);
+        if (rawMessages == null || rawMessages.isEmpty()) {
+            Messages.showInfoMessage(project, "No recent commit messages found in history.", "Commit Message History");
+            return;
+        }
+
+        List<String> sortedMessages = sortRecentMessagesLatestTop(rawMessages);
+        if (sortedMessages.isEmpty()) {
             Messages.showInfoMessage(project, "No recent commit messages found in history.", "Commit Message History");
             return;
         }
 
         JBPopupFactory.getInstance()
-                .createPopupChooserBuilder(messages)
+                .createPopupChooserBuilder(sortedMessages)
                 .setTitle("Recent Commit Messages")
+                .setRenderer(new DefaultListCellRenderer() {
+                    @Override
+                    public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus) {
+                        super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                        if (value instanceof String s) {
+                            String firstLine = s.lines().findFirst().orElse("");
+                            if (s.contains("\n")) {
+                                setText(firstLine + " ...");
+                            } else {
+                                setText(firstLine);
+                            }
+                        }
+                        return this;
+                    }
+                })
                 .setItemChosenCallback(selected -> {
                     if (selected != null && !selected.isBlank()) {
-                        String cleanMsg = selected;
-                        String p = prefixField.getText().trim().replaceAll("^\\[|\\]$", "").trim();
-                        if (!p.isEmpty()) {
-                            java.util.regex.Pattern pPattern = java.util.regex.Pattern.compile("^\\[" + java.util.regex.Pattern.quote(p) + "\\]\\s*", java.util.regex.Pattern.CASE_INSENSITIVE);
-                            cleanMsg = pPattern.matcher(cleanMsg).replaceFirst("");
-                        }
+                        String currentPrefix = (prefixField != null) ? prefixField.getText().trim() : "";
+                        String cleanMsg = cleanCommitMessage(selected, currentPrefix);
                         messageArea.setText(cleanMsg);
                     }
                 })
@@ -372,13 +711,16 @@ public class MultiBranchCommitDialog extends DialogWrapper {
             String localBranch = m.getLocalBranchName(p);
             boolean isCurrent = !curBranch.isEmpty() && curBranch.equalsIgnoreCase(localBranch);
             boolean onRemote = isRemoteBranchPresent(localBranch);
+            if (i < mappingCheckboxes.size()) {
+                mappingCheckboxes.get(i).setText(onRemote ? "Update origin/" + localBranch : "From " + m.getSourceOriginBranch());
+            }
 
             String previewText = "➔ " + localBranch + " (Merge target: " + m.getTargetOriginBranchName() + ")";
             if (isCurrent) {
                 previewText += "  [CURRENT BRANCH]";
             }
             if (onRemote) {
-                previewText += "  [ON REMOTE]";
+                previewText += "  [ON REMOTE - UPDATING]";
             }
             if (isCurrent) {
                 previewLabels.get(i).setFont(previewLabels.get(i).getFont().deriveFont(Font.BOLD));

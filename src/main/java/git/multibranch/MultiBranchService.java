@@ -69,8 +69,8 @@ public class MultiBranchService {
 
                     // 1. Fetch origin
                     if (config.isFetchOriginFirst()) {
-                        indicator.setText("Fetching origin...");
-                        runGit(repoDir, "fetch", "origin");
+                        indicator.setText("Fetching origin (with prune)...");
+                        runGit(repoDir, "fetch", "--prune", "origin");
                     }
 
                     // 2. Get files from the selected changelist
@@ -208,15 +208,19 @@ public class MultiBranchService {
                             runGit(worktreeDir, "reset", "--hard");
                             runGit(worktreeDir, "clean", "-fd");
 
-                            // Checkout branch starting from source origin branch (with --ignore-other-worktrees in case current worktree is on this branch)
-                            GitResult coRes = runGit(worktreeDir, "checkout", "-B", branchName, "--ignore-other-worktrees", mapping.getSourceOriginBranch());
+                            // Resolve starting point: update existing unmerged branch or start fresh from source origin
+                            BranchStartPoint startPoint = resolveBranchStartPoint(worktreeDir, branchName, mapping.getSourceOriginBranch());
+                            indicator.setText("Processing branch: " + branchName + " (from " + startPoint.getRef() + ")...");
+
+                            // Checkout branch starting from resolved start point (with --ignore-other-worktrees in case current worktree is on this branch)
+                            GitResult coRes = runGit(worktreeDir, "checkout", "-B", branchName, "--ignore-other-worktrees", startPoint.getRef());
                             if (coRes.exitCode != 0) {
                                 // Fallback without --ignore-other-worktrees if older git
-                                coRes = runGit(worktreeDir, "checkout", "-B", branchName, mapping.getSourceOriginBranch());
+                                coRes = runGit(worktreeDir, "checkout", "-B", branchName, startPoint.getRef());
                             }
                             if (coRes.exitCode != 0) {
                                 revertWorktreeAndLocalBranch(worktreeDir, repoDir, branchName);
-                                String errMsg = "Failed to checkout from " + mapping.getSourceOriginBranch() + ": " + (coRes.stderr.isBlank() ? coRes.stdout : coRes.stderr).trim();
+                                String errMsg = "Failed to checkout from " + startPoint.getRef() + ": " + (coRes.stderr.isBlank() ? coRes.stdout : coRes.stderr).trim();
                                 results.add(new MultiBranchResultItem(branchName, targetBranch, null, false, "Not pushed (checkout failed)", null, errMsg));
                                 continue;
                             }
@@ -519,13 +523,23 @@ public class MultiBranchService {
                 runGit(worktreeDir, "reset", "--hard");
                 runGit(worktreeDir, "clean", "-fd");
                 if (branchName != null && !branchName.isBlank()) {
-                    runGit(worktreeDir, "branch", "-D", branchName);
+                    GitResult remoteCheck = runGit(worktreeDir, "rev-parse", "--verify", "origin/" + branchName);
+                    if (remoteCheck.exitCode == 0) {
+                        runGit(worktreeDir, "branch", "-f", branchName, "origin/" + branchName);
+                    } else {
+                        runGit(worktreeDir, "branch", "-D", branchName);
+                    }
                 }
             }
         } catch (Exception ignored) {}
         try {
             if (repoDir != null && repoDir.exists() && branchName != null && !branchName.isBlank()) {
-                runGit(repoDir, "branch", "-D", branchName);
+                GitResult remoteCheck = runGit(repoDir, "rev-parse", "--verify", "origin/" + branchName);
+                if (remoteCheck.exitCode == 0) {
+                    runGit(repoDir, "branch", "-f", branchName, "origin/" + branchName);
+                } else {
+                    runGit(repoDir, "branch", "-D", branchName);
+                }
             }
         } catch (Exception ignored) {}
     }
@@ -677,5 +691,80 @@ public class MultiBranchService {
             }
         }
         return new BranchBehindStatus(true, 0, 0);
+    }
+
+    public static class BranchStartPoint {
+        private final String ref;
+        private final boolean existing;
+        private final String description;
+
+        public BranchStartPoint(String ref, boolean existing, String description) {
+            this.ref = ref;
+            this.existing = existing;
+            this.description = description;
+        }
+
+        public String getRef() { return ref; }
+        public boolean isExisting() { return existing; }
+        public String getDescription() { return description; }
+    }
+
+    public static BranchStartPoint resolveBranchStartPoint(File gitDir, String branchName, String defaultSourceOriginBranch) {
+        if (gitDir == null || branchName == null || branchName.isBlank()) {
+            return new BranchStartPoint(defaultSourceOriginBranch != null ? defaultSourceOriginBranch : "", false, "Source origin branch " + defaultSourceOriginBranch);
+        }
+
+        String sourceRef = defaultSourceOriginBranch != null ? defaultSourceOriginBranch.trim() : "";
+        if (!sourceRef.isEmpty()) {
+            GitResult checkSource = runGit(gitDir, "rev-parse", "--verify", sourceRef);
+            if (checkSource.exitCode != 0 && !sourceRef.startsWith("origin/")) {
+                GitResult checkOriginSource = runGit(gitDir, "rev-parse", "--verify", "origin/" + sourceRef);
+                if (checkOriginSource.exitCode == 0) {
+                    sourceRef = "origin/" + sourceRef;
+                }
+            }
+        }
+
+        // 1. Check if remote tracking branch origin/<branchName> exists
+        GitResult remoteCheck = runGit(gitDir, "rev-parse", "--verify", "origin/" + branchName);
+        boolean remoteExists = (remoteCheck.exitCode == 0);
+
+        if (remoteExists) {
+            // Check if origin/<branchName> has already been merged into source branch
+            boolean isMergedIntoSource = false;
+            if (!sourceRef.isEmpty()) {
+                GitResult ancestorCheck = runGit(gitDir, "merge-base", "--is-ancestor", "origin/" + branchName, sourceRef);
+                isMergedIntoSource = (ancestorCheck.exitCode == 0);
+            }
+
+            if (!isMergedIntoSource) {
+                // Remote branch has unmerged work!
+                // Check if local branch exists and is ahead of origin/<branchName>
+                GitResult localCheck = runGit(gitDir, "rev-parse", "--verify", "refs/heads/" + branchName);
+                if (localCheck.exitCode == 0) {
+                    BranchBehindStatus behindStatus = checkBranchBehindStatus(gitDir, branchName, branchName);
+                    if (behindStatus.getAheadCount() > 0 && behindStatus.getBehindCount() == 0) {
+                        return new BranchStartPoint(branchName, true, "Local branch '" + branchName + "' (ahead of origin by " + behindStatus.getAheadCount() + " commit(s))");
+                    }
+                }
+                return new BranchStartPoint("origin/" + branchName, true, "Existing remote branch 'origin/" + branchName + "' (unmerged)");
+            }
+        }
+
+        // 2. If not on remote (or already merged on remote), check if local branch exists with unmerged commits
+        GitResult localCheck = runGit(gitDir, "rev-parse", "--verify", "refs/heads/" + branchName);
+        if (localCheck.exitCode == 0) {
+            boolean localMerged = false;
+            if (!sourceRef.isEmpty()) {
+                GitResult ancestorCheck = runGit(gitDir, "merge-base", "--is-ancestor", branchName, sourceRef);
+                localMerged = (ancestorCheck.exitCode == 0);
+            }
+            if (!localMerged) {
+                return new BranchStartPoint(branchName, true, "Local branch '" + branchName + "' (unmerged commits)");
+            }
+        }
+
+        // 3. Fresh branch starting from source origin branch
+        return new BranchStartPoint(defaultSourceOriginBranch != null ? defaultSourceOriginBranch : "", false, "Source origin branch '" + defaultSourceOriginBranch + "'");
     }
 }
