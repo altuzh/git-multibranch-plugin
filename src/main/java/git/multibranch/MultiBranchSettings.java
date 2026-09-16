@@ -22,6 +22,7 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
         public String checkoutBranch = "deploy/test";
         public boolean fetchOriginFirst = true;
         public boolean pushAfterCommit = true;
+        public boolean premergeTargetBranch = true;
         public boolean generateMrLinks = true;
         public boolean openMrLinksInBrowser = true;
         public boolean stashOtherChanges = true;
@@ -59,6 +60,7 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
             s.checkoutBranch = this.checkoutBranch;
             s.fetchOriginFirst = this.fetchOriginFirst;
             s.pushAfterCommit = this.pushAfterCommit;
+            s.premergeTargetBranch = this.premergeTargetBranch;
             s.generateMrLinks = this.generateMrLinks;
             s.openMrLinksInBrowser = this.openMrLinksInBrowser;
             s.stashOtherChanges = this.stashOtherChanges;
@@ -82,6 +84,7 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
             State state = (State) o;
             return fetchOriginFirst == state.fetchOriginFirst &&
                     pushAfterCommit == state.pushAfterCommit &&
+                    premergeTargetBranch == state.premergeTargetBranch &&
                     generateMrLinks == state.generateMrLinks &&
                     openMrLinksInBrowser == state.openMrLinksInBrowser &&
                     stashOtherChanges == state.stashOtherChanges &&
@@ -101,7 +104,7 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
 
         @Override
         public int hashCode() {
-            return Objects.hash(branchMappings, checkoutBranch, fetchOriginFirst, pushAfterCommit,
+            return Objects.hash(branchMappings, checkoutBranch, fetchOriginFirst, pushAfterCommit, premergeTargetBranch,
                     generateMrLinks, openMrLinksInBrowser, stashOtherChanges, checkoutTestAfter,
                     prefixMessageWithTask, defaultChangelistName, lastTaskPrefix, gitLabCreateMr, gitLabAssignToMe,
                     gitLabDeleteSourceBranch, gitLabSquashCommits, gitLabHost, gitLabApiToken);
@@ -156,6 +159,7 @@ public class MultiBranchSettings implements PersistentStateComponent<MultiBranch
                 : "deploy/test");
         config.setFetchOriginFirst(myState.fetchOriginFirst);
         config.setPushAfterCommit(myState.pushAfterCommit);
+        config.setPremergeTargetBranch(myState.premergeTargetBranch);
         config.setGenerateMrLinks(myState.generateMrLinks);
         config.setOpenMrLinksInBrowser(myState.openMrLinksInBrowser);
         config.setStashOtherChanges(myState.stashOtherChanges);

@@ -8,6 +8,7 @@ An IntelliJ IDEA plugin for automating multi-branch Git workflows across target 
   - Automatically isolates commits into a temporary detached Git worktree (`.git/temp_mb_worktree_*`).
   - Commits changes to each configured branch (`{taskPrefix}-dev`, `{taskPrefix}-test`, `{taskPrefix}-uat`, `{taskPrefix}-prod`) starting from their corresponding origin tracking branches.
   - **Intelligent Starting Point & Fast-Forward Updates**: When target branches already exist on `origin` with active unmerged work, the plugin automatically branches from `origin/{branch}` (or local commits if ahead) instead of hard-resetting to source branches. New changes are added on top of existing commits, enabling seamless fast-forward pushes without triggering behind-remote warnings or requiring force-pushes.
+  - **Premerge Target Branch**: When "Premerge target branch" is enabled (default), if an existing task branch is being updated, the plugin automatically premerges the latest target branch (e.g. `origin/deploy/dev`) first before applying the new changes and committing. This ensures the branch stays synchronized with target branch evolution and avoids merge conflicts in GitLab MRs.
   - Automatically pushes branches to `origin` with tracking (`-u`).
   - **Behind-Remote & Force-with-Lease Protection**: Automatically inspects whether the branch already exists on remote and is behind/diverged from remote HEAD. Prompts the developer with an interactive confirmation dialog to push safely with `--force-with-lease` (or force-push all / skip / cancel).
 - **Designated Branch Context Detection**:
@@ -47,6 +48,13 @@ An IntelliJ IDEA plugin for automating multi-branch Git workflows across target 
   - Graceful fallback to pre-filled web MR creation links when API token is not configured or on network failures.
 - **Execution Review Window**:
   - Displays a comprehensive review window upon completion of all multi-branch operations, detailing branch status, commit hashes, push details, and MR links.
+  - **Copy Log to Clipboard**: Copies a structured diagnostic trace, environment details, and execution logs directly to the clipboard with sensitive token masking.
+  - Quick access link/button to open the log folder directly.
+- **Persistent Logging & Diagnostics**:
+  - Thread-safe, rotated file logging (`multibranch.log`, up to 3 backups, max 5 MB per file) located in IntelliJ's standard log path under `git-multibranch/`.
+  - Captures full lifecycle logs: Git operations, branch creation, commits, pushes, worktree events, and GitLab API interactions with timings and exit codes.
+  - Automatic sensitive credential sanitization: tokens (`glpat-*`, `PRIVATE-TOKEN`, `Bearer`), passwords, and URLs with embedded credentials are safely masked.
+  - **Open Log Folder**: One-click button in **Settings -> Version Control -> Multi-Branch Workflow** and in the review dialog to open the log directory in the OS file explorer.
 - **Convenient UI Entry Points**:
   - Status Bar Widget: dynamically shows branch count (e.g. `Multi-Branch (4)`) on the bottom status bar.
   - Bottom Git Branch Popup: Pinned at the top of the branch menu.

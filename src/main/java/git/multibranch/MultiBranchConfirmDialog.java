@@ -125,21 +125,28 @@ public class MultiBranchConfirmDialog extends DialogWrapper {
             JPanel stepsPanel = new JPanel(new GridLayout(0, 1, 0, JBUI.scale(2)));
             stepsPanel.setBorder(JBUI.Borders.emptyLeft(12));
 
+            int stepNum = 1;
             if (startPoint.isExisting()) {
-                stepsPanel.add(new JLabel("1. Checkout isolated worktree from " + startPoint.getRef() + " as " + localBranch + " (fast-forward update)"));
+                stepsPanel.add(new JLabel(stepNum++ + ". Checkout isolated worktree from " + startPoint.getRef() + " as " + localBranch + " (fast-forward update)"));
             } else {
-                stepsPanel.add(new JLabel("1. Checkout isolated worktree from " + mapping.getSourceOriginBranch() + " as " + localBranch));
+                stepsPanel.add(new JLabel(stepNum++ + ". Checkout isolated worktree from " + mapping.getSourceOriginBranch() + " as " + localBranch));
             }
-            stepsPanel.add(new JLabel("2. Apply patch from changelist '" + config.getChangelistName() + "' & commit"));
+
+            boolean branchExists = startPoint.isExisting() || MultiBranchService.isBranchExisting(repoDir, localBranch);
+            if (config.isPremergeTargetBranch() && branchExists) {
+                stepsPanel.add(new JLabel(stepNum++ + ". Premerge target branch '" + mapping.getTargetOriginBranchName() + "' into " + localBranch));
+            }
+
+            stepsPanel.add(new JLabel(stepNum++ + ". Apply patch from changelist '" + config.getChangelistName() + "' & commit"));
 
             if (config.isPushAfterCommit()) {
-                stepsPanel.add(new JLabel("3. Push " + localBranch + " to origin (fast-forward, check behind-remote status)"));
+                stepsPanel.add(new JLabel(stepNum++ + ". Push " + localBranch + " to origin (fast-forward, check behind-remote status)"));
             } else {
-                stepsPanel.add(new JLabel("3. Skip push (local branch only)"));
+                stepsPanel.add(new JLabel(stepNum++ + ". Skip push (local branch only)"));
             }
 
             if (config.isGenerateMrLinks()) {
-                stepsPanel.add(new JLabel("4. GitLab Merge Request: " + localBranch + " ➔ " + mapping.getTargetOriginBranchName() + " (create or reuse open MR)"));
+                stepsPanel.add(new JLabel(stepNum++ + ". GitLab Merge Request: " + localBranch + " ➔ " + mapping.getTargetOriginBranchName() + " (create or reuse open MR)"));
             }
 
             card.add(stepsPanel, BorderLayout.CENTER);
@@ -164,6 +171,9 @@ public class MultiBranchConfirmDialog extends DialogWrapper {
         }
         if (config.isStashOtherChanges()) {
             pipelineBox.add(new JLabel("➔ Pre-action: Stash uncommitted changes from other folders/changelists safely"));
+        }
+        if (config.isPremergeTargetBranch()) {
+            pipelineBox.add(new JLabel("➔ Pre-action: Premerge target branch into existing branches before committing"));
         }
 
         String checkoutBranch = config.getCheckoutBranch();

@@ -14,6 +14,7 @@ public class MultiBranchConfig {
     private final List<BranchMapping> branchMappings = new ArrayList<>();
     private boolean fetchOriginFirst = true;
     private boolean pushAfterCommit = true;
+    private boolean premergeTargetBranch = true;
     private boolean generateMrLinks = true;
     private boolean openMrLinksInBrowser = true;
     private boolean stashOtherChanges = true;
@@ -56,6 +57,7 @@ public class MultiBranchConfig {
         }
         copy.setFetchOriginFirst(this.fetchOriginFirst);
         copy.setPushAfterCommit(this.pushAfterCommit);
+        copy.setPremergeTargetBranch(this.premergeTargetBranch);
         copy.setGenerateMrLinks(this.generateMrLinks);
         copy.setOpenMrLinksInBrowser(this.openMrLinksInBrowser);
         copy.setStashOtherChanges(this.stashOtherChanges);
@@ -151,6 +153,14 @@ public class MultiBranchConfig {
 
     public void setPushAfterCommit(boolean pushAfterCommit) {
         this.pushAfterCommit = pushAfterCommit;
+    }
+
+    public boolean isPremergeTargetBranch() {
+        return premergeTargetBranch;
+    }
+
+    public void setPremergeTargetBranch(boolean premergeTargetBranch) {
+        this.premergeTargetBranch = premergeTargetBranch;
     }
 
     public boolean isGenerateMrLinks() {

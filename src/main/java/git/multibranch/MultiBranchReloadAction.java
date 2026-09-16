@@ -75,7 +75,7 @@ public class MultiBranchReloadAction extends AnAction {
             }
         } catch (Throwable ignored) {}
 
-        return "1.1.5";
+        return "1.1.8";
     }
 
     public static String getVersionFromZip(@Nullable File zipFile) {

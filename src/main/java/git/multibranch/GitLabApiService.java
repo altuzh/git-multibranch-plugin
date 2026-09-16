@@ -152,6 +152,7 @@ public class GitLabApiService {
 
     public static GitLabUser getCurrentUser(String apiUrl, String token) {
         if (apiUrl == null || token == null || token.isBlank()) return null;
+        long start = System.currentTimeMillis();
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(apiUrl + "/user"))
@@ -161,6 +162,8 @@ public class GitLabApiService {
                     .build();
 
             HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            long elapsed = System.currentTimeMillis() - start;
+            MultiBranchLog.logApiCall("GET", apiUrl + "/user", response.statusCode(), "Get current user", elapsed);
             if (response.statusCode() == 200) {
                 String body = response.body();
                 int id = extractIntJson(body, "id");
@@ -170,13 +173,17 @@ public class GitLabApiService {
                     return new GitLabUser(id, username, name);
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            long elapsed = System.currentTimeMillis() - start;
+            MultiBranchLog.warn("GitLab API GET " + apiUrl + "/user failed (" + elapsed + "ms): " + e.getMessage());
+        }
         return null;
     }
 
     public static String testConnection(String apiUrl, String token) {
         if (apiUrl == null || apiUrl.isBlank()) return "GitLab API URL is required.";
         if (token == null || token.isBlank()) return "GitLab API Token is required.";
+        long start = System.currentTimeMillis();
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(apiUrl + "/user"))
@@ -186,18 +193,28 @@ public class GitLabApiService {
                     .build();
 
             HttpResponse<String> response = HTTP_CLIENT.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            long elapsed = System.currentTimeMillis() - start;
+            MultiBranchLog.logApiCall("GET", apiUrl + "/user", response.statusCode(), "Test connection", elapsed);
             if (response.statusCode() == 200) {
                 String body = response.body();
                 String username = extractStringJson(body, "username");
                 String name = extractStringJson(body, "name");
                 int id = extractIntJson(body, "id");
-                return "Connection successful! Authenticated as " + (name != null ? name : username) + " (@" + username + ", ID: " + id + ")";
+                String res = "Connection successful! Authenticated as " + (name != null ? name : username) + " (@" + username + ", ID: " + id + ")";
+                MultiBranchLog.info("GitLab Test Connection: " + res);
+                return res;
             } else if (response.statusCode() == 401 || response.statusCode() == 403) {
-                return "Authentication failed (HTTP " + response.statusCode() + "): Invalid or expired Personal Access Token.";
+                String err = "Authentication failed (HTTP " + response.statusCode() + "): Invalid or expired Personal Access Token.";
+                MultiBranchLog.warn("GitLab Test Connection failed: " + err);
+                return err;
             } else {
-                return "GitLab server returned HTTP " + response.statusCode() + ": " + response.body();
+                String err = "GitLab server returned HTTP " + response.statusCode() + ": " + response.body();
+                MultiBranchLog.warn("GitLab Test Connection error: " + err);
+                return err;
             }
         } catch (Exception ex) {
+            long elapsed = System.currentTimeMillis() - start;
+            MultiBranchLog.error("GitLab Test Connection exception (" + elapsed + "ms): " + ex.getMessage(), ex);
             return "Connection error: " + ex.getMessage();
         }
     }
@@ -234,7 +251,11 @@ public class GitLabApiService {
                     .GET()
                     .build();
 
+            long checkStart = System.currentTimeMillis();
             HttpResponse<String> checkResp = HTTP_CLIENT.send(checkReq, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            long checkElapsed = System.currentTimeMillis() - checkStart;
+            MultiBranchLog.logApiCall("GET", checkUrl, checkResp.statusCode(), "Check existing open MR", checkElapsed);
+
             if (checkResp.statusCode() == 200) {
                 String body = checkResp.body().trim();
                 if (body.startsWith("[") && body.length() > 2) {
@@ -244,11 +265,14 @@ public class GitLabApiService {
                         if (webUrl == null || !webUrl.contains("/merge_requests/")) {
                             webUrl = info.getWebProjectUrl() + "/-/merge_requests/" + iid;
                         }
+                        MultiBranchLog.info("Found existing open MR !" + iid + " for " + sourceBranch + " -> " + targetBranch + ": " + webUrl);
                         return MrResult.success(webUrl, iid, "Existing open MR", true);
                     }
                 }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception e) {
+            MultiBranchLog.warn("Error checking existing MR: " + e.getMessage());
+        }
 
         // 2. Create new MR
         try {
@@ -274,7 +298,11 @@ public class GitLabApiService {
                     .POST(HttpRequest.BodyPublishers.ofString(json.toString(), StandardCharsets.UTF_8))
                     .build();
 
+            long postStart = System.currentTimeMillis();
             HttpResponse<String> postResp = HTTP_CLIENT.send(postReq, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            long postElapsed = System.currentTimeMillis() - postStart;
+            MultiBranchLog.logApiCall("POST", createUrl, postResp.statusCode(), "Create MR", postElapsed);
+
             if (postResp.statusCode() == 201) {
                 String body = postResp.body();
                 int iid = extractTopLevelInt(body, "iid");
@@ -282,6 +310,7 @@ public class GitLabApiService {
                 if (iid > 0 && (webUrl == null || !webUrl.contains("/merge_requests/"))) {
                     webUrl = info.getWebProjectUrl() + "/-/merge_requests/" + iid;
                 }
+                MultiBranchLog.info("Created new MR !" + iid + ": " + webUrl);
                 return MrResult.success(webUrl, iid, "Created via API", false);
             } else if (postResp.statusCode() == 409) {
                 // Conflict - an MR already exists for this branch
@@ -301,6 +330,7 @@ public class GitLabApiService {
                     if (webUrl == null || !webUrl.contains("/merge_requests/")) {
                         webUrl = info.getWebProjectUrl() + "/-/merge_requests/" + existingIid;
                     }
+                    MultiBranchLog.info("Resolved 409 conflict to existing MR !" + existingIid + ": " + webUrl);
                     return MrResult.success(webUrl, existingIid, "Existing MR !" + existingIid, true);
                 }
 
@@ -315,7 +345,11 @@ public class GitLabApiService {
                             .header("PRIVATE-TOKEN", token.trim())
                             .GET()
                             .build();
+                    long findStart = System.currentTimeMillis();
                     HttpResponse<String> findResp = HTTP_CLIENT.send(findReq, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+                    long findElapsed = System.currentTimeMillis() - findStart;
+                    MultiBranchLog.logApiCall("GET", queryUrl, findResp.statusCode(), "Query conflict MR", findElapsed);
+
                     if (findResp.statusCode() == 200 && findResp.body().trim().startsWith("[") && findResp.body().trim().length() > 2) {
                         int fIid = extractTopLevelInt(findResp.body(), "iid");
                         String fUrl = extractMrWebUrl(findResp.body());
@@ -323,13 +357,16 @@ public class GitLabApiService {
                             if (fUrl == null || !fUrl.contains("/merge_requests/")) {
                                 fUrl = info.getWebProjectUrl() + "/-/merge_requests/" + fIid;
                             }
+                            MultiBranchLog.info("Located conflict MR !" + fIid + ": " + fUrl);
                             return MrResult.success(fUrl, fIid, "Existing open MR !" + fIid, true);
                         }
                     }
                 } catch (Exception ignored) {}
 
+                MultiBranchLog.warn("MR 409 conflict could not resolve exact IID/URL for " + sourceBranch + " -> " + targetBranch);
                 return MrResult.error("Merge request already exists for " + sourceBranch + " -> " + targetBranch);
             } else {
+                MultiBranchLog.warn("GitLab API error (HTTP " + postResp.statusCode() + "): " + MultiBranchLog.sanitize(postResp.body()));
                 return MrResult.error("GitLab API error (HTTP " + postResp.statusCode() + "): " + postResp.body());
             }
         } catch (Exception ex) {

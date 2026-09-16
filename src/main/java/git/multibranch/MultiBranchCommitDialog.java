@@ -54,6 +54,7 @@ public class MultiBranchCommitDialog extends DialogWrapper {
 
     private JBCheckBox fetchCheckbox;
     private JBCheckBox pushCheckbox;
+    private JBCheckBox premergeCheckbox;
     private JBCheckBox mrLinksCheckbox;
     private JBCheckBox openMrCheckbox;
     private JBCheckBox stashCheckbox;
@@ -531,11 +532,13 @@ public class MultiBranchCommitDialog extends DialogWrapper {
 
         // 5. Options
         gbc.gridy++;
-        JPanel optionsBox = new JPanel(new GridLayout(3, 2, JBUI.scale(8), JBUI.scale(4)));
+        JPanel optionsBox = new JPanel(new GridLayout(0, 2, JBUI.scale(8), JBUI.scale(4)));
         optionsBox.setBorder(BorderFactory.createTitledBorder("Options"));
 
         fetchCheckbox = new JBCheckBox("Fetch origin first", config.isFetchOriginFirst());
         pushCheckbox = new JBCheckBox("Push branches to origin", config.isPushAfterCommit());
+        premergeCheckbox = new JBCheckBox("Premerge target branch", config.isPremergeTargetBranch());
+        premergeCheckbox.setToolTipText("If branch exists, target branch will be premerged first before committing changes");
         mrLinksCheckbox = new JBCheckBox("Generate MR links", config.isGenerateMrLinks());
         openMrCheckbox = new JBCheckBox("Open created MRs in browser", config.isOpenMrLinksInBrowser());
 
@@ -556,9 +559,10 @@ public class MultiBranchCommitDialog extends DialogWrapper {
 
         optionsBox.add(fetchCheckbox);
         optionsBox.add(pushCheckbox);
+        optionsBox.add(premergeCheckbox);
+        optionsBox.add(stashCheckbox);
         optionsBox.add(mrLinksCheckbox);
         optionsBox.add(openMrCheckbox);
-        optionsBox.add(stashCheckbox);
         optionsBox.add(checkoutTestCheckbox);
         root.add(optionsBox, gbc);
 
@@ -584,6 +588,7 @@ public class MultiBranchCommitDialog extends DialogWrapper {
                 }
                 config.setCheckoutBranch(settings.getState().checkoutBranch);
                 config.setCheckoutTestAfter(settings.getState().checkoutTestAfter);
+                config.setPremergeTargetBranch(settings.getState().premergeTargetBranch);
                 config.setGitLabCreateMr(settings.getState().gitLabCreateMr);
                 config.setGitLabAssignToMe(settings.getState().gitLabAssignToMe);
                 config.setGitLabDeleteSourceBranch(settings.getState().gitLabDeleteSourceBranch);
@@ -599,6 +604,9 @@ public class MultiBranchCommitDialog extends DialogWrapper {
                 if (checkoutTestCheckbox != null) {
                     checkoutTestCheckbox.setText("Checkout " + config.getCheckoutBranch() + " on finish");
                     checkoutTestCheckbox.setSelected(config.isCheckoutTestAfter());
+                }
+                if (premergeCheckbox != null) {
+                    premergeCheckbox.setSelected(config.isPremergeTargetBranch());
                 }
                 rebuildBranchRows();
                 updateBranchPreviews();
@@ -801,6 +809,7 @@ public class MultiBranchCommitDialog extends DialogWrapper {
         }
         config.setFetchOriginFirst(fetchCheckbox.isSelected());
         config.setPushAfterCommit(pushCheckbox.isSelected());
+        config.setPremergeTargetBranch(premergeCheckbox.isSelected());
         config.setGenerateMrLinks(mrLinksCheckbox.isSelected());
         config.setOpenMrLinksInBrowser(openMrCheckbox.isSelected());
         config.setStashOtherChanges(stashCheckbox.isSelected());
@@ -815,6 +824,7 @@ public class MultiBranchCommitDialog extends DialogWrapper {
                 state.defaultChangelistName = config.getChangelistName();
                 state.fetchOriginFirst = config.isFetchOriginFirst();
                 state.pushAfterCommit = config.isPushAfterCommit();
+                state.premergeTargetBranch = config.isPremergeTargetBranch();
                 state.generateMrLinks = config.isGenerateMrLinks();
                 state.openMrLinksInBrowser = config.isOpenMrLinksInBrowser();
                 state.stashOtherChanges = config.isStashOtherChanges();

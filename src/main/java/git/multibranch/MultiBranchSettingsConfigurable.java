@@ -3,6 +3,7 @@ package git.multibranch;
 import com.intellij.openapi.options.ConfigurationException;
 import com.intellij.openapi.options.SearchableConfigurable;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.ui.Messages;
 import com.intellij.ui.components.JBCheckBox;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBTextField;
@@ -26,6 +27,7 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
     private JBTextField changelistField;
     private JBCheckBox fetchOriginCheckbox;
     private JBCheckBox pushAfterCommitCheckbox;
+    private JBCheckBox premergeTargetBranchCheckbox;
     private JBCheckBox generateMrLinksCheckbox;
     private JBCheckBox openMrLinksCheckbox;
     private JBCheckBox stashOtherChangesCheckbox;
@@ -170,6 +172,8 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         JPanel checkPanel = new JPanel(new GridLayout(4, 2, JBUI.scale(12), JBUI.scale(2)));
         fetchOriginCheckbox = new JBCheckBox("Fetch origin before operations");
         pushAfterCommitCheckbox = new JBCheckBox("Push branches to origin by default");
+        premergeTargetBranchCheckbox = new JBCheckBox("Premerge target branch if it exists");
+        premergeTargetBranchCheckbox.setToolTipText("If branch exists, target branch will be premerged first before committing changes");
         generateMrLinksCheckbox = new JBCheckBox("Generate MR links by default");
         openMrLinksCheckbox = new JBCheckBox("Open created MRs automatically in browser");
         stashOtherChangesCheckbox = new JBCheckBox("Stash uncommitted changes in other folders");
@@ -187,6 +191,7 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
 
         checkPanel.add(fetchOriginCheckbox);
         checkPanel.add(pushAfterCommitCheckbox);
+        checkPanel.add(premergeTargetBranchCheckbox);
         checkPanel.add(generateMrLinksCheckbox);
         checkPanel.add(openMrLinksCheckbox);
         checkPanel.add(stashOtherChangesCheckbox);
@@ -195,6 +200,42 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         optionsPanel.add(checkPanel, gbc);
 
         bottomContainer.add(optionsPanel);
+
+        // Diagnostics & Logs section
+        JPanel logsPanel = new JPanel(new BorderLayout(JBUI.scale(8), 0));
+        logsPanel.setBorder(BorderFactory.createTitledBorder("Plugin Logs & Diagnostics"));
+
+        JPanel logInfoPanel = new JPanel(new GridLayout(2, 1, 0, JBUI.scale(2)));
+        JBLabel logPathLabel = new JBLabel("Log folder: " + MultiBranchLog.getLogDirectory().getAbsolutePath());
+        logPathLabel.setCopyable(true);
+        logInfoPanel.add(logPathLabel);
+
+        JLabel logDescLabel = new JLabel("Stores operational and diagnostic logs for git operations, branch creation, commits, pushes, and GitLab API requests.");
+        logDescLabel.setFont(logDescLabel.getFont().deriveFont(Font.ITALIC, JBUI.scaleFontSize(11)));
+        logDescLabel.setForeground(JBUI.CurrentTheme.Label.disabledForeground());
+        logInfoPanel.add(logDescLabel);
+
+        logsPanel.add(logInfoPanel, BorderLayout.CENTER);
+
+        JPanel logActionsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, JBUI.scale(4), 0));
+        JButton openLogFolderBtn = new JButton("Open Log Folder");
+        openLogFolderBtn.setToolTipText("Open the plugin log folder in system file explorer");
+        openLogFolderBtn.addActionListener(e -> {
+            MultiBranchLog.info("Settings: Opening log directory from Settings UI...");
+            boolean opened = MultiBranchLog.openLogDirectory();
+            if (!opened) {
+                Messages.showInfoMessage(
+                        project,
+                        "Log directory: " + MultiBranchLog.getLogDirectory().getAbsolutePath(),
+                        "Multi-Branch Log Folder"
+                );
+            }
+        });
+        logActionsPanel.add(openLogFolderBtn);
+        logsPanel.add(logActionsPanel, BorderLayout.EAST);
+
+        bottomContainer.add(Box.createVerticalStrut(JBUI.scale(8)));
+        bottomContainer.add(logsPanel);
 
         rootPanel.add(bottomContainer, BorderLayout.SOUTH);
 
@@ -307,6 +348,7 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         if (tablePanel.isModified(state.branchMappings)) return true;
         if (fetchOriginCheckbox.isSelected() != state.fetchOriginFirst) return true;
         if (pushAfterCommitCheckbox.isSelected() != state.pushAfterCommit) return true;
+        if (premergeTargetBranchCheckbox.isSelected() != state.premergeTargetBranch) return true;
         if (generateMrLinksCheckbox.isSelected() != state.generateMrLinks) return true;
         if (openMrLinksCheckbox.isSelected() != state.openMrLinksInBrowser) return true;
         if (stashOtherChangesCheckbox.isSelected() != state.stashOtherChanges) return true;
@@ -350,6 +392,7 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
             state.defaultChangelistName = changelistField.getText().trim();
             state.fetchOriginFirst = fetchOriginCheckbox.isSelected();
             state.pushAfterCommit = pushAfterCommitCheckbox.isSelected();
+            state.premergeTargetBranch = premergeTargetBranchCheckbox.isSelected();
             state.generateMrLinks = generateMrLinksCheckbox.isSelected();
             state.openMrLinksInBrowser = openMrLinksCheckbox.isSelected();
             state.stashOtherChanges = stashOtherChangesCheckbox.isSelected();
@@ -380,6 +423,7 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         changelistField.setText(state.defaultChangelistName != null ? state.defaultChangelistName : "Changes");
         fetchOriginCheckbox.setSelected(state.fetchOriginFirst);
         pushAfterCommitCheckbox.setSelected(state.pushAfterCommit);
+        premergeTargetBranchCheckbox.setSelected(state.premergeTargetBranch);
         generateMrLinksCheckbox.setSelected(state.generateMrLinks);
         openMrLinksCheckbox.setSelected(state.openMrLinksInBrowser);
         stashOtherChangesCheckbox.setSelected(state.stashOtherChanges);

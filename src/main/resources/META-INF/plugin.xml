@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>git.multibranch</id>
     <name>Multi-Branch Commit &amp; Push</name>
-    <version>1.1.6</version>
+    <version>1.1.8</version>
     <vendor email="altuzh@users.noreply.github.com" url="https://github.com/altuzh/git-multibranch-plugin">Alexey Tuzhikov</vendor>
 
     <description><![CDATA[
@@ -12,6 +12,7 @@
         <li>Commits changes across all 4 branches safely without disrupting the working tree</li>
         <li>Pushes branches to origin with upstream tracking</li>
         <li>Generates clickable GitLab Merge Request or GitHub Pull Request creation links with target branches pre-selected</li>
+        <li>Persistent diagnostic logging for troubleshooting, Open Log Folder in settings, and Copy Log to Clipboard in result dialog</li>
         <li>Supports dynamic hot-reloading without IDE restart</li>
     </ul>
     ]]></description>

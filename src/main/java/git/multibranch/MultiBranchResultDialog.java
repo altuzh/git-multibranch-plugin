@@ -200,8 +200,26 @@ public class MultiBranchResultDialog extends DialogWrapper {
                 }
             }
         });
+        JButton copyLogBtn = new JButton("Copy Log to Clipboard");
+        copyLogBtn.setToolTipText("Copy full workflow execution log to clipboard for analysis and troubleshooting");
+        copyLogBtn.addActionListener(e -> {
+            String logText = MultiBranchLog.getClipboardLogText(results);
+            Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(logText), null);
+            String orig = copyLogBtn.getText();
+            copyLogBtn.setText("Log Copied!");
+            Timer timer = new Timer(2500, evt -> copyLogBtn.setText(orig));
+            timer.setRepeats(false);
+            timer.start();
+        });
+
+        JButton openLogFolderBtn = new JButton("Open Log Folder");
+        openLogFolderBtn.setToolTipText("Open the plugin log directory in system file explorer");
+        openLogFolderBtn.addActionListener(e -> MultiBranchLog.openLogDirectory());
+
         bottomBar.add(copyAllBtn);
         bottomBar.add(openAllBtn);
+        bottomBar.add(copyLogBtn);
+        bottomBar.add(openLogFolderBtn);
         panel.add(bottomBar, BorderLayout.SOUTH);
 
         return panel;

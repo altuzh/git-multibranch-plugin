@@ -65,6 +65,33 @@ public class MultiBranchService {
                 List<String> targetRelativePaths = new ArrayList<>();
 
                 try {
+                    MultiBranchLog.startExecution("Multi-Branch Commit & Push");
+                    MultiBranchLog.info("Project: " + (project != null ? project.getName() : "null") + " | Repository: " + repoDir.getAbsolutePath());
+                    MultiBranchLog.info("Changelist: '" + config.getChangelistName() + "' | Task Prefix: '" + config.getTaskPrefix() + "'");
+                    MultiBranchLog.info("Commit Message: " + config.getFormattedCommitMessage());
+                    MultiBranchLog.info("Options: fetchOrigin=" + config.isFetchOriginFirst() +
+                            ", push=" + config.isPushAfterCommit() +
+                            ", premergeTarget=" + config.isPremergeTargetBranch() +
+                            ", mrLinks=" + config.isGenerateMrLinks() +
+                            ", openBrowser=" + config.isOpenMrLinksInBrowser() +
+                            ", stashOther=" + config.isStashOtherChanges() +
+                            ", checkoutTestAfter=" + config.isCheckoutTestAfter() +
+                            ", checkoutBranch=" + config.getCheckoutBranch());
+                    MultiBranchLog.info("GitLab Settings: createMr=" + config.isGitLabCreateMr() +
+                            ", assignToMe=" + config.isGitLabAssignToMe() +
+                            ", deleteSourceBranch=" + config.isGitLabDeleteSourceBranch() +
+                            ", squashCommits=" + config.isGitLabSquashCommits() +
+                            ", host=" + (config.getGitLabHost() != null && !config.getGitLabHost().isBlank() ? config.getGitLabHost() : "(auto-detect)") +
+                            ", tokenConfigured=" + (config.getGitLabApiToken() != null && !config.getGitLabApiToken().isBlank()));
+
+                    for (BranchMapping bm : config.getBranchMappings()) {
+                        MultiBranchLog.info("Branch Mapping: enabled=" + bm.isEnabled() +
+                                ", source=" + bm.getSourceOriginBranch() +
+                                ", target=" + bm.getTargetOriginBranchName() +
+                                ", suffix=" + bm.getBranchSuffix() +
+                                " -> localBranch=" + bm.getLocalBranchName(config.getTaskPrefix()));
+                    }
+
                     indicator.setText("Preparing changes from changelist '" + config.getChangelistName() + "'...");
 
                     // 1. Fetch origin
@@ -83,6 +110,7 @@ public class MultiBranchService {
                         }
                     }
                     if (targetList == null) {
+                        MultiBranchLog.error("Changelist '" + config.getChangelistName() + "' not found in project.");
                         notifyError(project, "Changelist '" + config.getChangelistName() + "' not found.");
                         return;
                     }
@@ -96,7 +124,10 @@ public class MultiBranchService {
                         }
                     }
 
+                    MultiBranchLog.info("Changelist '" + config.getChangelistName() + "' contains " + targetRelativePaths.size() + " modified file(s): " + targetRelativePaths);
+
                     if (targetRelativePaths.isEmpty()) {
+                        MultiBranchLog.error("No modified files found in changelist '" + config.getChangelistName() + "'.");
                         notifyError(project, "No modified files in changelist '" + config.getChangelistName() + "'.");
                         return;
                     }
@@ -116,10 +147,12 @@ public class MultiBranchService {
                     GitResult diffRes = runGit(repoDir, diffCmd.toArray(new String[0]));
 
                     if (diffRes.stdout.trim().isEmpty()) {
+                        MultiBranchLog.error("No diff produced for the files in changelist '" + config.getChangelistName() + "'.");
                         notifyError(project, "No diff produced for the files in changelist '" + config.getChangelistName() + "'.");
                         return;
                     }
                     Files.writeString(tempPatch.toPath(), diffRes.stdout, StandardCharsets.UTF_8);
+                    MultiBranchLog.info("Created binary patch (" + tempPatch.length() + " bytes) at " + tempPatch.getAbsolutePath());
 
                     // 4. Check if uncommitted changes exist in other folders / working tree
                     boolean hasOtherChanges = false;
@@ -143,6 +176,8 @@ public class MultiBranchService {
                         }
                     }
 
+                    MultiBranchLog.info("Working tree status check: uncommitted changes in other folders = " + hasOtherChanges);
+
                     // 5. If uncommitted changes exist in other folders and stash is enabled:
                     // First, revert target files from workdir so they are not stashed into other changes!
                     if (hasOtherChanges && config.isStashOtherChanges()) {
@@ -154,6 +189,7 @@ public class MultiBranchService {
                         indicator.setText("Stashing uncommitted changes from other folders...");
                         GitResult stashRes = runGit(repoDir, "stash", "push", "--include-untracked", "-m", "multibranch_temp_stash_" + System.currentTimeMillis());
                         didStash = (stashRes.exitCode == 0 && !stashRes.stdout.contains("No local changes to save"));
+                        MultiBranchLog.info("Stashed other changes: didStash=" + didStash);
                     } else {
                         // Revert target files from workdir since patch is safely stored
                         List<String> coCmd = new ArrayList<>(List.of("checkout", "HEAD", "--"));
@@ -164,8 +200,10 @@ public class MultiBranchService {
                     // 6. Create detached worktree
                     indicator.setText("Setting up isolated git worktree...");
                     worktreeDir = new File(repoDir, ".git/temp_mb_worktree_" + System.currentTimeMillis());
+                    MultiBranchLog.info("Creating isolated worktree at: " + worktreeDir.getAbsolutePath());
                     GitResult wtRes = runGit(repoDir, "worktree", "add", "--detach", worktreeDir.getAbsolutePath());
                     if (wtRes.exitCode != 0) {
+                        MultiBranchLog.error("Failed to create git worktree: " + wtRes.stderr);
                         notifyError(project, "Failed to create git worktree: " + wtRes.stderr);
                         return;
                     }
@@ -186,6 +224,9 @@ public class MultiBranchService {
                             GitLabApiService.GitLabUser user = GitLabApiService.getCurrentUser(glInfo.getApiUrl(), gitLabToken);
                             if (user != null) {
                                 gitLabUserId = user.getId();
+                                MultiBranchLog.info("GitLab current user resolved: id=" + gitLabUserId + ", username=" + user.getUsername());
+                            } else {
+                                MultiBranchLog.warn("Failed to resolve GitLab current user from " + glInfo.getApiUrl());
                             }
                         }
                     }
@@ -201,6 +242,7 @@ public class MultiBranchService {
                         String branchName = mapping.getLocalBranchName(config.getTaskPrefix());
                         String targetBranch = mapping.getTargetOriginBranchName();
                         indicator.setText("Processing branch: " + branchName);
+                        MultiBranchLog.info(">>> Processing branch: " + branchName + " -> " + targetBranch + " <<<");
 
                         try {
                             // Ensure clean detached worktree before starting each branch
@@ -210,7 +252,9 @@ public class MultiBranchService {
 
                             // Resolve starting point: update existing unmerged branch or start fresh from source origin
                             BranchStartPoint startPoint = resolveBranchStartPoint(worktreeDir, branchName, mapping.getSourceOriginBranch());
+                            boolean branchExists = startPoint.isExisting() || isBranchExisting(worktreeDir, branchName);
                             indicator.setText("Processing branch: " + branchName + " (from " + startPoint.getRef() + ")...");
+                            MultiBranchLog.info("Branch " + branchName + " start point resolved: ref=" + startPoint.getRef() + " (" + startPoint.getDescription() + "), branchExists=" + branchExists);
 
                             // Checkout branch starting from resolved start point (with --ignore-other-worktrees in case current worktree is on this branch)
                             GitResult coRes = runGit(worktreeDir, "checkout", "-B", branchName, "--ignore-other-worktrees", startPoint.getRef());
@@ -221,8 +265,30 @@ public class MultiBranchService {
                             if (coRes.exitCode != 0) {
                                 revertWorktreeAndLocalBranch(worktreeDir, repoDir, branchName);
                                 String errMsg = "Failed to checkout from " + startPoint.getRef() + ": " + (coRes.stderr.isBlank() ? coRes.stdout : coRes.stderr).trim();
+                                MultiBranchLog.error("Branch " + branchName + " checkout failed: " + errMsg);
                                 results.add(new MultiBranchResultItem(branchName, targetBranch, null, false, "Not pushed (checkout failed)", null, errMsg));
                                 continue;
+                            }
+
+                            // Premerge target branch if enabled and branch exists
+                            if (config.isPremergeTargetBranch() && branchExists) {
+                                String targetRef = resolveTargetBranchRef(worktreeDir, targetBranch);
+                                if (targetRef != null) {
+                                    indicator.setText("Premerging target branch " + targetRef + " into " + branchName + "...");
+                                    MultiBranchLog.info("Premerging target branch " + targetRef + " into " + branchName + "...");
+                                    GitResult mergeRes = runGit(worktreeDir, "merge", "--no-edit", targetRef);
+                                    if (mergeRes.exitCode != 0) {
+                                        runGit(worktreeDir, "merge", "--abort");
+                                        revertWorktreeAndLocalBranch(worktreeDir, repoDir, branchName);
+                                        String errMsg = "Failed to premerge target branch '" + targetRef + "': " + (mergeRes.stderr.isBlank() ? mergeRes.stdout : mergeRes.stderr).trim();
+                                        MultiBranchLog.error("Branch " + branchName + " premerge failed: " + errMsg);
+                                        results.add(new MultiBranchResultItem(branchName, targetBranch, null, false, "Not pushed (premerge conflict)", null, errMsg));
+                                        continue;
+                                    }
+                                    MultiBranchLog.info("Premerge of " + targetRef + " into " + branchName + " completed: " + mergeRes.stdout.trim());
+                                } else {
+                                    MultiBranchLog.warn("Target branch '" + targetBranch + "' could not be resolved for premerge into " + branchName);
+                                }
                             }
 
                             // Apply patch
@@ -230,6 +296,7 @@ public class MultiBranchService {
                             if (applyRes.exitCode != 0) {
                                 revertWorktreeAndLocalBranch(worktreeDir, repoDir, branchName);
                                 String errMsg = "Failed to apply changes: " + (applyRes.stderr.isBlank() ? applyRes.stdout : applyRes.stderr).trim();
+                                MultiBranchLog.error("Branch " + branchName + " patch apply failed: " + errMsg);
                                 results.add(new MultiBranchResultItem(branchName, targetBranch, null, false, "Not pushed (patch conflict)", null, errMsg));
                                 continue;
                             }
@@ -240,6 +307,7 @@ public class MultiBranchService {
                             if (commitRes.exitCode != 0) {
                                 revertWorktreeAndLocalBranch(worktreeDir, repoDir, branchName);
                                 String errMsg = "Commit failed: " + (commitRes.stderr.isBlank() ? commitRes.stdout : commitRes.stderr).trim();
+                                MultiBranchLog.error("Branch " + branchName + " commit failed: " + errMsg);
                                 results.add(new MultiBranchResultItem(branchName, targetBranch, null, false, "Not pushed (commit failed)", null, errMsg));
                                 continue;
                             }
@@ -247,6 +315,7 @@ public class MultiBranchService {
                             // Get commit hash
                             GitResult revRes = runGit(worktreeDir, "rev-parse", "--short", "HEAD");
                             String commitHash = revRes.stdout.trim();
+                            MultiBranchLog.info("Branch " + branchName + " commit created successfully: " + commitHash);
 
                             // Push to origin with check if branch is behind remote HEAD
                             boolean pushed = false;
@@ -361,6 +430,7 @@ public class MultiBranchService {
 
                             if (pushFailed) {
                                 revertWorktreeAndLocalBranch(worktreeDir, repoDir, branchName);
+                                MultiBranchLog.error("Branch " + branchName + " push failed: " + pushDetails);
                                 results.add(new MultiBranchResultItem(
                                         branchName,
                                         targetBranch,
@@ -393,13 +463,18 @@ public class MultiBranchService {
                                     );
                                     if (mrRes.isSuccess()) {
                                         mrUrl = mrRes.getWebUrl();
+                                        MultiBranchLog.info("Branch " + branchName + " GitLab MR created/found: " + mrUrl);
                                     } else {
                                         mrUrl = GitLabApiService.generateWebMrUrl(repoDir, config.getGitLabHost(), branchName, targetBranch);
+                                        MultiBranchLog.warn("Branch " + branchName + " GitLab MR API call did not succeed (" + mrRes.getMessage() + "), fell back to web URL: " + mrUrl);
                                     }
                                 } else {
                                     mrUrl = GitLabApiService.generateWebMrUrl(repoDir, config.getGitLabHost(), branchName, targetBranch);
+                                    MultiBranchLog.info("Branch " + branchName + " generated review web URL: " + mrUrl);
                                 }
                             }
+
+                            MultiBranchLog.info("Branch " + branchName + " successfully finished. Commit=" + commitHash + ", Push=" + pushDetails + ", MR=" + (mrUrl != null ? mrUrl : "N/A"));
 
                             results.add(new MultiBranchResultItem(
                                     branchName,
@@ -424,6 +499,7 @@ public class MultiBranchService {
                         } catch (Throwable t) {
                             revertWorktreeAndLocalBranch(worktreeDir, repoDir, branchName);
                             String errMsg = "Unexpected error during branch operation: " + t.getMessage();
+                            MultiBranchLog.error("Branch " + branchName + " failed with unexpected error: " + errMsg, t);
                             results.add(new MultiBranchResultItem(
                                     branchName,
                                     targetBranch,
@@ -437,16 +513,19 @@ public class MultiBranchService {
                     }
 
                 } catch (Exception ex) {
+                    MultiBranchLog.error("Error during multi-branch execution: " + ex.getMessage(), ex);
                     notifyError(project, "Error during multi-branch execution: " + ex.getMessage());
                 } finally {
                     // Clean up worktree
                     if (worktreeDir != null && worktreeDir.exists()) {
                         indicator.setText("Cleaning up temporary worktree...");
+                        MultiBranchLog.info("Removing temporary worktree: " + worktreeDir.getAbsolutePath());
                         runGit(repoDir, "worktree", "remove", "--force", worktreeDir.getAbsolutePath());
                     }
                     // Clean up patch
                     if (tempPatch != null && tempPatch.exists()) {
                         tempPatch.delete();
+                        MultiBranchLog.info("Deleted temporary patch file.");
                     }
 
                     // If staying on current branch, sync working tree with HEAD in case current branch was committed to
@@ -471,6 +550,7 @@ public class MultiBranchService {
 
                     if (config.isCheckoutTestAfter()) {
                         indicator.setText("Checking out " + targetBranch + "...");
+                        MultiBranchLog.info("Checking out post-action branch: " + targetBranch);
                         GitResult coTest = runGit(repoDir, "checkout", targetBranch);
                         if (coTest.exitCode != 0) {
                             coTest = runGit(repoDir, "checkout", "-B", targetBranch, "origin/" + targetBranch);
@@ -486,11 +566,21 @@ public class MultiBranchService {
                     // Stash pop if stashed
                     if (didStash) {
                         indicator.setText("Restoring stashed changes from other folders (stash pop)...");
+                        MultiBranchLog.info("Restoring stashed changes from other folders (stash pop)...");
                         GitResult popRes = runGit(repoDir, "stash", "pop");
                         if (popRes.exitCode != 0) {
+                            MultiBranchLog.warn("Stash pop encountered a conflict: " + popRes.stderr);
                             notifyError(project, "Stash pop encountered a conflict. Your stashed changes are safely preserved in git stash list.\nError: " + popRes.stderr);
                         }
                     }
+
+                    // Log overall execution summary
+                    long successCount = results.stream().filter(MultiBranchResultItem::isSuccess).count();
+                    long pushedCount = results.stream().filter(MultiBranchResultItem::isPushed).count();
+                    long mrCount = results.stream().filter(r -> r.getMrUrl() != null && !r.getMrUrl().isBlank()).count();
+                    long failedCount = results.size() - successCount;
+                    MultiBranchLog.finishExecution(String.format("Execution finished: %d/%d branches succeeded, %d pushed, %d MRs created, %d failed",
+                            successCount, results.size(), pushedCount, mrCount, failedCount));
 
                     // Save commit message to IDEA VcsConfiguration for reuse
                     ApplicationManager.getApplication().invokeLater(() -> {
@@ -581,6 +671,7 @@ public class MultiBranchService {
     }
 
     public static GitResult runGit(File workingDir, String... args) {
+        long startTime = System.currentTimeMillis();
         try {
             List<String> cmd = new ArrayList<>();
             cmd.add("git");
@@ -621,14 +712,20 @@ public class MultiBranchService {
                 p.destroyForcibly();
                 outThread.interrupt();
                 errThread.interrupt();
+                long duration = System.currentTimeMillis() - startTime;
+                MultiBranchLog.logGitCommand(workingDir, args, -1, duration, stdout.toString(), "Git command timed out after 120 seconds");
                 return new GitResult(-1, stdout.toString(), "Git command timed out after 120 seconds: git " + String.join(" ", args));
             }
 
             outThread.join(2000);
             errThread.join(2000);
 
+            long duration = System.currentTimeMillis() - startTime;
+            MultiBranchLog.logGitCommand(workingDir, args, p.exitValue(), duration, stdout.toString(), stderr.toString());
             return new GitResult(p.exitValue(), stdout.toString(), stderr.toString());
         } catch (Exception e) {
+            long duration = System.currentTimeMillis() - startTime;
+            MultiBranchLog.logGitCommand(workingDir, args, -1, duration, "", e.getMessage());
             return new GitResult(-1, "", e.getMessage());
         }
     }
@@ -766,5 +863,33 @@ public class MultiBranchService {
 
         // 3. Fresh branch starting from source origin branch
         return new BranchStartPoint(defaultSourceOriginBranch != null ? defaultSourceOriginBranch : "", false, "Source origin branch '" + defaultSourceOriginBranch + "'");
+    }
+
+    public static boolean isBranchExisting(File gitDir, String branchName) {
+        if (gitDir == null || branchName == null || branchName.isBlank()) return false;
+        GitResult remoteCheck = runGit(gitDir, "rev-parse", "--verify", "origin/" + branchName);
+        if (remoteCheck.exitCode == 0) return true;
+        GitResult localCheck = runGit(gitDir, "rev-parse", "--verify", "refs/heads/" + branchName);
+        return localCheck.exitCode == 0;
+    }
+
+    public static String resolveTargetBranchRef(File gitDir, String targetBranchName) {
+        if (gitDir == null || targetBranchName == null || targetBranchName.isBlank()) {
+            return null;
+        }
+        String target = targetBranchName.trim();
+        if (target.startsWith("origin/")) {
+            GitResult res = runGit(gitDir, "rev-parse", "--verify", target);
+            if (res.exitCode == 0) return target;
+            String local = target.substring("origin/".length());
+            GitResult localRes = runGit(gitDir, "rev-parse", "--verify", local);
+            if (localRes.exitCode == 0) return local;
+        } else {
+            GitResult res = runGit(gitDir, "rev-parse", "--verify", "origin/" + target);
+            if (res.exitCode == 0) return "origin/" + target;
+            GitResult localRes = runGit(gitDir, "rev-parse", "--verify", target);
+            if (localRes.exitCode == 0) return target;
+        }
+        return null;
     }
 }

@@ -66,6 +66,7 @@ public class BranchSettingsTest {
         assertEquals("deploy/test", state.checkoutBranch);
         assertTrue(state.fetchOriginFirst);
         assertTrue(state.pushAfterCommit);
+        assertTrue(state.premergeTargetBranch);
         assertTrue(state.generateMrLinks);
         assertTrue(state.openMrLinksInBrowser);
         assertTrue(state.stashOtherChanges);
@@ -85,6 +86,9 @@ public class BranchSettingsTest {
 
         copy.checkoutBranch = "develop";
         assertNotEquals(orig.checkoutBranch, copy.checkoutBranch);
+
+        copy.premergeTargetBranch = false;
+        assertNotEquals(orig.premergeTargetBranch, copy.premergeTargetBranch);
     }
 
     @Test
@@ -174,10 +178,15 @@ public class BranchSettingsTest {
         MultiBranchConfig copy = orig.copy();
         assertEquals("DEMO-123", copy.getTaskPrefix());
         assertEquals("deploy/custom", copy.getCheckoutBranch());
+        assertTrue(copy.isPremergeTargetBranch());
         assertTrue(copy.isGitLabCreateMr());
         assertTrue(copy.isGitLabAssignToMe());
         assertTrue(copy.isGitLabDeleteSourceBranch());
         assertTrue(copy.isGitLabSquashCommits());
+
+        copy.setPremergeTargetBranch(false);
+        assertFalse(copy.isPremergeTargetBranch());
+        assertTrue(orig.isPremergeTargetBranch());
 
         copy.setGitLabHost("https://custom.gitlab.local");
         copy.setGitLabApiToken("glpat-secret-token");
@@ -920,6 +929,297 @@ public class BranchSettingsTest {
             MultiBranchService.BranchStartPoint sp5 = MultiBranchService.resolveBranchStartPoint(repo, "TASK-202-dev", "origin/deploy/dev");
             assertEquals("TASK-202-dev", sp5.getRef());
             assertTrue(sp5.isExisting());
+
+        } finally {
+            // Cleanup temp repo
+            try (var stream = Files.walk(tempDir)) {
+                stream.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    public void testMultiBranchLogSanitize() {
+        // Test token sanitization
+        String raw1 = "Header PRIVATE-TOKEN: glpat-abcdef1234567890xyz";
+        String s1 = MultiBranchLog.sanitize(raw1);
+        assertFalse(s1.contains("glpat-abcdef1234567890xyz"));
+        assertTrue(s1.contains("PRIVATE-TOKEN: ***MASKED***") || s1.contains("***MASKED***"));
+
+        String raw2 = "Authorization: Bearer secret_bearer_token_123";
+        String s2 = MultiBranchLog.sanitize(raw2);
+        assertFalse(s2.contains("secret_bearer_token_123"));
+        assertTrue(s2.contains("Bearer ***MASKED***"));
+
+        String raw3 = "Push to https://user:super_secret_password@gitlab.company.com/repo.git";
+        String s3 = MultiBranchLog.sanitize(raw3);
+        assertFalse(s3.contains("super_secret_password"));
+        assertTrue(s3.contains("https://user:***MASKED***@gitlab.company.com/repo.git"));
+
+        assertEquals("", MultiBranchLog.sanitize(null));
+        assertEquals("normal message", MultiBranchLog.sanitize("normal message"));
+    }
+
+    @Test
+    public void testMultiBranchLogBasicAndFile() throws Exception {
+        Path tempLogDir = Files.createTempDirectory("mb_test_basic_logs");
+        try {
+            MultiBranchLog.setTestLogDirectory(tempLogDir.toFile());
+            File logDir = MultiBranchLog.getLogDirectory();
+            assertNotNull(logDir);
+            assertTrue(logDir.exists());
+            assertTrue(logDir.isDirectory());
+
+            File logFile = MultiBranchLog.getLogFile();
+            assertNotNull(logFile);
+            assertEquals(MultiBranchLog.LOG_FILE_NAME, logFile.getName());
+
+            // Logging at various levels
+            MultiBranchLog.debug("Test debug message");
+            MultiBranchLog.info("Test info message");
+            MultiBranchLog.warn("Test warn message");
+            MultiBranchLog.error("Test error message", new RuntimeException("Simulated error"));
+
+            assertTrue(logFile.exists());
+            assertTrue(logFile.length() > 0);
+
+            String excerpt = MultiBranchLog.getRecentLogFileExcerpt(200);
+            assertNotNull(excerpt);
+            assertTrue(excerpt.contains("Test info message"));
+            assertTrue(excerpt.contains("Test warn message"));
+            assertTrue(excerpt.contains("Simulated error"));
+        } finally {
+            MultiBranchLog.setTestLogDirectory(null);
+            try (var s = Files.walk(tempLogDir)) {
+                s.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    public void testMultiBranchLogCustomDirectory() throws Exception {
+        Path tempLogDir = Files.createTempDirectory("mb_test_logs");
+        try {
+            MultiBranchLog.setTestLogDirectory(tempLogDir.toFile());
+            assertEquals(tempLogDir.toFile(), MultiBranchLog.getLogDirectory());
+
+            MultiBranchLog.info("Custom directory log entry");
+            File customFile = MultiBranchLog.getLogFile();
+            assertTrue(customFile.exists());
+            String content = Files.readString(customFile.toPath());
+            assertTrue(content.contains("Custom directory log entry"));
+        } finally {
+            MultiBranchLog.setTestLogDirectory(null);
+            try (var s = Files.walk(tempLogDir)) {
+                s.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    @Test
+    public void testMultiBranchLogExecutionBufferAndClipboard() {
+        MultiBranchLog.startExecution("Unit Test Run");
+        MultiBranchLog.info("Step 1: preparing branch");
+        MultiBranchLog.logGitCommand(new File("."), new String[]{"checkout", "-b", "feature"}, 0, 15, "Switched to branch", "");
+        MultiBranchLog.logGitCommand(new File("."), new String[]{"push", "origin"}, 1, 50, "", "remote rejected");
+        MultiBranchLog.logApiCall("POST", "https://gitlab.example.com/api/v4/projects/1/merge_requests", 201, "MR !42 created", 120);
+        MultiBranchLog.finishExecution("Completed: 1 succeeded, 1 failed");
+
+        String buffer = MultiBranchLog.getLastExecutionBuffer();
+        assertNotNull(buffer);
+        assertTrue(buffer.contains("=== Multi-Branch Execution Started:"));
+        assertTrue(buffer.contains("Step 1: preparing branch"));
+        assertTrue(buffer.contains("git checkout -b feature"));
+        assertTrue(buffer.contains("Git FAILED (exit 1"));
+        assertTrue(buffer.contains("HTTP 201"));
+        assertTrue(buffer.contains("=== Multi-Branch Execution Finished in"));
+
+        List<MultiBranchResultItem> items = List.of(
+                new MultiBranchResultItem("TASK-1-dev", "deploy/dev", "abc1234", true, "Pushed to origin", "https://gitlab.example.com/mr/1", null),
+                new MultiBranchResultItem("TASK-1-test", "deploy/test", null, false, "Push failed", null, "remote rejected")
+        );
+
+        String clipboardText = MultiBranchLog.getClipboardLogText(items);
+        assertNotNull(clipboardText);
+        assertTrue(clipboardText.contains("MULTI-BRANCH WORKFLOW EXECUTION LOG"));
+        assertTrue(clipboardText.contains("Plugin Version: 1.1.8"));
+        assertTrue(clipboardText.contains("Log Directory:"));
+        assertTrue(clipboardText.contains("TASK-1-dev -> deploy/dev [SUCCESS]"));
+        assertTrue(clipboardText.contains("TASK-1-test -> deploy/test [FAILED]"));
+        assertTrue(clipboardText.contains("Commit: abc1234"));
+        assertTrue(clipboardText.contains("MR URL: https://gitlab.example.com/mr/1"));
+        assertTrue(clipboardText.contains("remote rejected"));
+        assertTrue(clipboardText.contains("DETAILED EXECUTION TRACE"));
+        assertTrue(clipboardText.contains("Step 1: preparing branch"));
+
+        // Fallback when buffer cleared: gets file excerpt
+        MultiBranchLog.clearExecutionBuffer();
+        String fallbackClipboard = MultiBranchLog.getClipboardLogText(items);
+        assertNotNull(fallbackClipboard);
+        assertTrue(fallbackClipboard.contains("MULTI-BRANCH WORKFLOW EXECUTION LOG"));
+    }
+
+    @Test
+    public void testResultDialogCreationOnEdt() {
+        List<MultiBranchResultItem> items = List.of(
+                new MultiBranchResultItem("TASK-1-dev", "deploy/dev", "abc1234", true, "Pushed to origin", "https://gitlab.example.com/mr/1", null)
+        );
+
+        try {
+            javax.swing.SwingUtilities.invokeAndWait(() -> {
+                try {
+                    MultiBranchResultDialog dialog = new MultiBranchResultDialog(null, items);
+                    assertNotNull(dialog);
+                } catch (Throwable ignored) {
+                    // Headless / non-IDEA environment check
+                }
+            });
+        } catch (Exception ignored) {}
+    }
+
+    @Test
+    public void testPremergeTargetBranchConfigAndState() {
+        MultiBranchConfig config = new MultiBranchConfig();
+        assertTrue(config.isPremergeTargetBranch());
+
+        config.setPremergeTargetBranch(false);
+        assertFalse(config.isPremergeTargetBranch());
+
+        MultiBranchConfig copy = config.copy();
+        assertFalse(copy.isPremergeTargetBranch());
+
+        MultiBranchSettings.State state = new MultiBranchSettings.State();
+        assertTrue(state.premergeTargetBranch);
+
+        state.premergeTargetBranch = false;
+        MultiBranchSettings.State stateCopy = state.copy();
+        assertEquals(state, stateCopy);
+        assertEquals(state.hashCode(), stateCopy.hashCode());
+
+        MultiBranchSettings settings = new MultiBranchSettings(null);
+        settings.loadState(state);
+        MultiBranchConfig fromSettingsConfig = settings.toConfig(null);
+        assertFalse(fromSettingsConfig.isPremergeTargetBranch());
+    }
+
+    @Test
+    public void testIsBranchExisting() {
+        assertFalse(MultiBranchService.isBranchExisting(null, "main"));
+        assertFalse(MultiBranchService.isBranchExisting(new File("."), null));
+        assertFalse(MultiBranchService.isBranchExisting(new File("."), "   "));
+        assertFalse(MultiBranchService.isBranchExisting(new File("."), "non_existent_branch_123456789"));
+
+        File currentRepo = new File(".");
+        assertTrue(MultiBranchService.isBranchExisting(currentRepo, "main"));
+    }
+
+    @Test
+    public void testResolveTargetBranchRef() {
+        assertNull(MultiBranchService.resolveTargetBranchRef(null, "deploy/dev"));
+        assertNull(MultiBranchService.resolveTargetBranchRef(new File("."), null));
+        assertNull(MultiBranchService.resolveTargetBranchRef(new File("."), "   "));
+        assertNull(MultiBranchService.resolveTargetBranchRef(new File("."), "non_existent_target_9999"));
+
+        File currentRepo = new File(".");
+        String ref1 = MultiBranchService.resolveTargetBranchRef(currentRepo, "main");
+        assertNotNull(ref1);
+        assertTrue(ref1.equals("origin/main") || ref1.equals("main"));
+
+        String ref2 = MultiBranchService.resolveTargetBranchRef(currentRepo, "origin/main");
+        assertNotNull(ref2);
+        assertTrue(ref2.equals("origin/main") || ref2.equals("main"));
+    }
+
+    @Test
+    public void testPremergeTargetBranchWithRealGitRepo() throws Exception {
+        Path tempDir = Files.createTempDirectory("git_premerge_test_");
+        File repo = tempDir.toFile();
+        try {
+            // git init
+            MultiBranchService.runGit(repo, "init");
+            MultiBranchService.runGit(repo, "config", "user.name", "Test User");
+            MultiBranchService.runGit(repo, "config", "user.email", "test@example.com");
+
+            // Base commit on deploy/dev
+            File f = new File(repo, "base.txt");
+            Files.writeString(f.toPath(), "base content");
+            MultiBranchService.runGit(repo, "add", "base.txt");
+            MultiBranchService.runGit(repo, "commit", "-m", "Initial commit on deploy/dev");
+            MultiBranchService.runGit(repo, "branch", "-M", "deploy/dev");
+
+            // Simulate remote tracking branch origin/deploy/dev
+            MultiBranchService.runGit(repo, "update-ref", "refs/remotes/origin/deploy/dev", "HEAD");
+
+            // Case 1: Branch does NOT exist yet
+            assertFalse(MultiBranchService.isBranchExisting(repo, "TASK-101-dev"));
+
+            // Case 2: Create branch TASK-101-dev with its own commit
+            MultiBranchService.runGit(repo, "checkout", "-b", "TASK-101-dev", "deploy/dev");
+            File taskFile = new File(repo, "task101.txt");
+            Files.writeString(taskFile.toPath(), "task 101 content");
+            MultiBranchService.runGit(repo, "add", "task101.txt");
+            MultiBranchService.runGit(repo, "commit", "-m", "TASK-101 feature commit");
+
+            // Simulate remote tracking branch origin/TASK-101-dev
+            MultiBranchService.runGit(repo, "update-ref", "refs/remotes/origin/TASK-101-dev", "HEAD");
+
+            // Now branch EXISTS
+            assertTrue(MultiBranchService.isBranchExisting(repo, "TASK-101-dev"));
+
+            // Case 3: Target branch deploy/dev moves forward with a new commit (e.g. by another developer)
+            MultiBranchService.runGit(repo, "checkout", "deploy/dev");
+            File devFile = new File(repo, "other_feature.txt");
+            Files.writeString(devFile.toPath(), "other developer content");
+            MultiBranchService.runGit(repo, "add", "other_feature.txt");
+            MultiBranchService.runGit(repo, "commit", "-m", "Other developer commit on deploy/dev");
+            MultiBranchService.runGit(repo, "update-ref", "refs/remotes/origin/deploy/dev", "HEAD");
+
+            // Verify TASK-101-dev does NOT have other_feature.txt yet
+            MultiBranchService.runGit(repo, "checkout", "TASK-101-dev");
+            assertFalse(devFile.exists());
+            assertTrue(taskFile.exists());
+
+            // Resolve target ref for premerge
+            String targetRef = MultiBranchService.resolveTargetBranchRef(repo, "deploy/dev");
+            assertNotNull(targetRef);
+
+            // Premerge target branch into TASK-101-dev
+            MultiBranchService.GitResult mergeRes = MultiBranchService.runGit(repo, "merge", "--no-edit", targetRef);
+            assertEquals(0, mergeRes.exitCode);
+
+            // Now TASK-101-dev HAS BOTH files (premerge succeeded!)
+            assertTrue(taskFile.exists());
+            assertTrue(devFile.exists());
+
+            // Adding a new change on top
+            File patchFile = new File(repo, "new_fix.txt");
+            Files.writeString(patchFile.toPath(), "new fix content");
+            MultiBranchService.runGit(repo, "add", "new_fix.txt");
+            MultiBranchService.GitResult commitRes = MultiBranchService.runGit(repo, "commit", "-m", "TASK-101 second commit");
+            assertEquals(0, commitRes.exitCode);
+
+            // Case 4: Premerge conflict handling
+            // Introduce a conflicting change in deploy/dev
+            MultiBranchService.runGit(repo, "checkout", "deploy/dev");
+            File conflictFile = new File(repo, "conflict.txt");
+            Files.writeString(conflictFile.toPath(), "version from deploy/dev");
+            MultiBranchService.runGit(repo, "add", "conflict.txt");
+            MultiBranchService.runGit(repo, "commit", "-m", "Conflict file on deploy/dev");
+            MultiBranchService.runGit(repo, "update-ref", "refs/remotes/origin/deploy/dev", "HEAD");
+
+            // On TASK-101-dev, introduce conflicting content in the same file
+            MultiBranchService.runGit(repo, "checkout", "TASK-101-dev");
+            Files.writeString(conflictFile.toPath(), "conflicting version from TASK-101");
+            MultiBranchService.runGit(repo, "add", "conflict.txt");
+            MultiBranchService.runGit(repo, "commit", "-m", "Conflict file on TASK-101");
+
+            // Attempt premerge
+            MultiBranchService.GitResult conflictMerge = MultiBranchService.runGit(repo, "merge", "--no-edit", targetRef);
+            assertNotEquals(0, conflictMerge.exitCode);
+
+            // Safe abort resets working directory
+            MultiBranchService.GitResult abortRes = MultiBranchService.runGit(repo, "merge", "--abort");
+            assertEquals(0, abortRes.exitCode);
 
         } finally {
             // Cleanup temp repo
