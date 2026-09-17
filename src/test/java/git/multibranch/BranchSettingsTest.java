@@ -1042,7 +1042,7 @@ public class BranchSettingsTest {
         String clipboardText = MultiBranchLog.getClipboardLogText(items);
         assertNotNull(clipboardText);
         assertTrue(clipboardText.contains("MULTI-BRANCH WORKFLOW EXECUTION LOG"));
-        assertTrue(clipboardText.contains("Plugin Version: 1.1.8"));
+        assertTrue(clipboardText.contains("Plugin Version: " + MultiBranchReloadAction.getRunningVersion()));
         assertTrue(clipboardText.contains("Log Directory:"));
         assertTrue(clipboardText.contains("TASK-1-dev -> deploy/dev [SUCCESS]"));
         assertTrue(clipboardText.contains("TASK-1-test -> deploy/test [FAILED]"));
@@ -1227,6 +1227,62 @@ public class BranchSettingsTest {
                 stream.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
             } catch (Exception ignored) {}
         }
+    }
+
+    @Test
+    public void testResolveHistorySelection() {
+        // 1. Bracketed prefix extracted
+        MultiBranchCommitDialog.ParsedCommitMessage res1 =
+                MultiBranchCommitDialog.resolveHistorySelection("[TASK-123] Fix login crash", "OLD-999");
+        assertEquals("TASK-123", res1.getPrefix());
+        assertEquals("Fix login crash", res1.getMessage());
+
+        // 2. Issue key with colon
+        MultiBranchCommitDialog.ParsedCommitMessage res2 =
+                MultiBranchCommitDialog.resolveHistorySelection("PROJ-456: Update documentation", "");
+        assertEquals("PROJ-456", res2.getPrefix());
+        assertEquals("Update documentation", res2.getMessage());
+
+        // 3. Issue key with dash
+        MultiBranchCommitDialog.ParsedCommitMessage res3 =
+                MultiBranchCommitDialog.resolveHistorySelection("PROJ-456 - Update documentation", "OLD");
+        assertEquals("PROJ-456", res3.getPrefix());
+        assertEquals("Update documentation", res3.getMessage());
+
+        // 4. Issue key with space
+        MultiBranchCommitDialog.ParsedCommitMessage res4 =
+                MultiBranchCommitDialog.resolveHistorySelection("PROJ-456 Update documentation", "");
+        assertEquals("PROJ-456", res4.getPrefix());
+        assertEquals("Update documentation", res4.getMessage());
+
+        // 5. Only prefix tag
+        MultiBranchCommitDialog.ParsedCommitMessage res5 =
+                MultiBranchCommitDialog.resolveHistorySelection("[TASK-123]", "CURRENT");
+        assertEquals("TASK-123", res5.getPrefix());
+        assertEquals("", res5.getMessage());
+
+        // 6. No prefix in message retains blank prefix so current prefix is not overridden
+        MultiBranchCommitDialog.ParsedCommitMessage res6 =
+                MultiBranchCommitDialog.resolveHistorySelection("Regular commit message without tag", "EXISTING-1");
+        assertEquals("", res6.getPrefix());
+        assertEquals("Regular commit message without tag", res6.getMessage());
+
+        // 7. Multiline commit message with prefix
+        MultiBranchCommitDialog.ParsedCommitMessage res7 =
+                MultiBranchCommitDialog.resolveHistorySelection("[FEAT-88] Add feature\n\nDetailed description\nLine 2", "");
+        assertEquals("FEAT-88", res7.getPrefix());
+        assertEquals("Add feature\n\nDetailed description\nLine 2", res7.getMessage());
+
+        // 8. Null and blank handling
+        MultiBranchCommitDialog.ParsedCommitMessage res8 =
+                MultiBranchCommitDialog.resolveHistorySelection(null, "CURRENT");
+        assertEquals("", res8.getPrefix());
+        assertEquals("", res8.getMessage());
+
+        MultiBranchCommitDialog.ParsedCommitMessage res9 =
+                MultiBranchCommitDialog.resolveHistorySelection("   ", "CURRENT");
+        assertEquals("", res9.getPrefix());
+        assertEquals("", res9.getMessage());
     }
 }
 

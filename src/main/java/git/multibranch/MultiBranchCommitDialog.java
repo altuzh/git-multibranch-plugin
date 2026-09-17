@@ -253,6 +253,19 @@ public class MultiBranchCommitDialog extends DialogWrapper {
         return sorted;
     }
 
+    public static ParsedCommitMessage resolveHistorySelection(@Nullable String selected, @Nullable String currentPrefix) {
+        if (selected == null || selected.isBlank()) {
+            return new ParsedCommitMessage("", "");
+        }
+        ParsedCommitMessage parsed = extractPrefixAndMessage(selected);
+        if (!parsed.getPrefix().isBlank()) {
+            String clean = cleanCommitMessage(selected, parsed.getPrefix());
+            return new ParsedCommitMessage(parsed.getPrefix(), clean.isEmpty() ? parsed.getMessage() : clean);
+        }
+        String cleanMsg = cleanCommitMessage(selected, currentPrefix);
+        return new ParsedCommitMessage("", cleanMsg);
+    }
+
     public static InitialCommitInfo resolveInitialCommitInfo(
             @Nullable MultiBranchCommitAction.BranchDetectionResult detection,
             @Nullable String lastTaskPrefix,
@@ -702,8 +715,11 @@ public class MultiBranchCommitDialog extends DialogWrapper {
                 .setItemChosenCallback(selected -> {
                     if (selected != null && !selected.isBlank()) {
                         String currentPrefix = (prefixField != null) ? prefixField.getText().trim() : "";
-                        String cleanMsg = cleanCommitMessage(selected, currentPrefix);
-                        messageArea.setText(cleanMsg);
+                        ParsedCommitMessage resolved = resolveHistorySelection(selected, currentPrefix);
+                        if (!resolved.getPrefix().isBlank() && prefixField != null) {
+                            prefixField.setText(resolved.getPrefix());
+                        }
+                        messageArea.setText(resolved.getMessage());
                     }
                 })
                 .createPopup()
