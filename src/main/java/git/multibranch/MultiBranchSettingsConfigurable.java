@@ -176,7 +176,8 @@ public class MultiBranchSettingsConfigurable implements SearchableConfigurable {
         premergeTargetBranchCheckbox.setToolTipText("If branch exists, target branch will be premerged first before committing changes");
         generateMrLinksCheckbox = new JBCheckBox("Generate MR links by default");
         openMrLinksCheckbox = new JBCheckBox("Open created MRs automatically in browser");
-        stashOtherChangesCheckbox = new JBCheckBox("Stash uncommitted changes in other folders");
+        stashOtherChangesCheckbox = new JBCheckBox("Stash uncommitted changes in other folders (restore to 'Uncommitted changes')");
+        stashOtherChangesCheckbox.setToolTipText("If uncommitted changes exist in other folders, stash before commit and restore to 'Uncommitted changes' changelist");
         checkoutTestCheckbox = new JBCheckBox("Checkout target branch on finish");
         prefixMessageCheckbox = new JBCheckBox("Prepend task prefix [PREFIX] to commit message");
 

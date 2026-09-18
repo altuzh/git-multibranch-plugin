@@ -1284,6 +1284,151 @@ public class BranchSettingsTest {
         assertEquals("", res9.getPrefix());
         assertEquals("", res9.getMessage());
     }
+
+    @Test
+    public void testUncommittedChangesConstant() {
+        assertEquals("Uncommitted changes", MultiBranchService.UNCOMMITTED_CHANGES_CHANGELIST_NAME);
+    }
+
+    @Test
+    public void testIsPathMatchingStash() {
+        java.util.Set<String> stashed = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        stashed.add("src/main/resources/application.yml");
+        stashed.add("src/main/resources/META-INF/config.json");
+        stashed.add("pom.xml");
+
+        // Exact match
+        assertTrue(MultiBranchService.isPathMatchingStash("src/main/resources/application.yml", stashed));
+        assertTrue(MultiBranchService.isPathMatchingStash("src/main/resources/META-INF/config.json", stashed));
+        assertTrue(MultiBranchService.isPathMatchingStash("pom.xml", stashed));
+
+        // Case-insensitivity
+        assertTrue(MultiBranchService.isPathMatchingStash("SRC/MAIN/RESOURCES/APPLICATION.YML", stashed));
+        assertTrue(MultiBranchService.isPathMatchingStash("POM.XML", stashed));
+
+        // Windows path backslashes
+        assertTrue(MultiBranchService.isPathMatchingStash("src\\main\\resources\\application.yml", stashed));
+        assertTrue(MultiBranchService.isPathMatchingStash("src\\main\\resources\\META-INF\\config.json", stashed));
+
+        // Subpath match (e.g. prefix slash or dot-slash)
+        assertTrue(MultiBranchService.isPathMatchingStash("/src/main/resources/application.yml", stashed));
+        assertTrue(MultiBranchService.isPathMatchingStash("./src/main/resources/application.yml", stashed));
+        assertTrue(MultiBranchService.isPathMatchingStash("repo/src/main/resources/application.yml", stashed));
+
+        // Non-matching file
+        assertFalse(MultiBranchService.isPathMatchingStash("src/main/java/git/multibranch/MultiBranchService.java", stashed));
+        assertFalse(MultiBranchService.isPathMatchingStash("other/sub/different.xml", stashed));
+
+        // Null or empty set matches all (fallback behavior)
+        assertTrue(MultiBranchService.isPathMatchingStash("any/file.txt", null));
+        assertTrue(MultiBranchService.isPathMatchingStash("any/file.txt", java.util.Set.of()));
+    }
+
+    @Test
+    public void testRestoreChangesToUncommittedChangelistNullSafe() {
+        // Must safely no-op without throwing NPE or errors in headless environment
+        assertDoesNotThrow(() -> {
+            MultiBranchService.restoreChangesToUncommittedChangelist(null, null, null);
+        });
+    }
+
+    @Test
+    public void testGitStashAndPopPreservesOtherChangesWithRealGitRepo() throws Exception {
+        Path tempDir = Files.createTempDirectory("git_stash_pop_test_");
+        File repo = tempDir.toFile();
+        try {
+            // git init
+            MultiBranchService.runGit(repo, "init");
+            MultiBranchService.runGit(repo, "config", "user.name", "Test User");
+            MultiBranchService.runGit(repo, "config", "user.email", "test@example.com");
+
+            // Initial commit on main
+            File initialFile = new File(repo, "README.md");
+            Files.writeString(initialFile.toPath(), "initial repo");
+            MultiBranchService.runGit(repo, "add", "README.md");
+            MultiBranchService.runGit(repo, "commit", "-m", "Initial commit");
+
+            // Create target file (simulating selected changelist)
+            File targetFile = new File(repo, "target.txt");
+            Files.writeString(targetFile.toPath(), "target content v1");
+            MultiBranchService.runGit(repo, "add", "target.txt");
+            MultiBranchService.runGit(repo, "commit", "-m", "Add target file");
+
+            // Now introduce changes:
+            // 1. Modify target file (changelist file)
+            Files.writeString(targetFile.toPath(), "target content modified");
+
+            // 2. Modify other files (other folders/changelists)
+            File appYml = new File(repo, "application.yml");
+            Files.writeString(appYml.toPath(), "server:\n  port: 8080");
+
+            File configJson = new File(repo, "config.json");
+            Files.writeString(configJson.toPath(), "{\"env\": \"dev\"}");
+
+            File pomXml = new File(repo, "pom.xml");
+            Files.writeString(pomXml.toPath(), "<project></project>");
+
+            // Step 4 simulation: check status porcelain
+            MultiBranchService.GitResult statusBefore = MultiBranchService.runGit(repo, "status", "--porcelain");
+            assertEquals(0, statusBefore.exitCode);
+            assertTrue(statusBefore.stdout.contains("target.txt"));
+            assertTrue(statusBefore.stdout.contains("application.yml"));
+            assertTrue(statusBefore.stdout.contains("config.json"));
+            assertTrue(statusBefore.stdout.contains("pom.xml"));
+
+            // Step 5 simulation: revert target file
+            List<String> targetRelPaths = List.of("target.txt");
+            MultiBranchService.runGit(repo, "checkout", "HEAD", "--", "target.txt");
+
+            // Target file reverted to HEAD
+            assertEquals("target content v1", Files.readString(targetFile.toPath()));
+
+            // Capture exact files remaining right before stashing
+            MultiBranchService.GitResult preStash = MultiBranchService.runGit(repo, "status", "--porcelain");
+            java.util.Set<String> stashedPaths = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+            for (String line : preStash.stdout.split("\\r?\\n")) {
+                if (line.isBlank() || line.length() <= 3) continue;
+                String f = line.substring(3).trim();
+                stashedPaths.add(f.replace('\\', '/'));
+            }
+
+            assertTrue(stashedPaths.contains("application.yml"));
+            assertTrue(stashedPaths.contains("config.json"));
+            assertTrue(stashedPaths.contains("pom.xml"));
+            assertFalse(stashedPaths.contains("target.txt"));
+
+            // Stash other changes
+            MultiBranchService.GitResult stashRes = MultiBranchService.runGit(repo, "stash", "push", "--include-untracked", "-m", "test_stash");
+            assertEquals(0, stashRes.exitCode);
+
+            // Working directory is now completely clean
+            MultiBranchService.GitResult statusClean = MultiBranchService.runGit(repo, "status", "--porcelain");
+            assertTrue(statusClean.stdout.isBlank());
+
+            // Simulate stash pop on checkout branch
+            MultiBranchService.GitResult popRes = MultiBranchService.runGit(repo, "stash", "pop");
+            assertEquals(0, popRes.exitCode);
+
+            // All 3 other files are restored to disk!
+            assertTrue(appYml.exists());
+            assertTrue(configJson.exists());
+            assertTrue(pomXml.exists());
+            assertEquals("server:\n  port: 8080", Files.readString(appYml.toPath()).replace("\r\n", "\n"));
+            assertEquals("{\"env\": \"dev\"}", Files.readString(configJson.toPath()).replace("\r\n", "\n"));
+            assertEquals("<project></project>", Files.readString(pomXml.toPath()).replace("\r\n", "\n"));
+
+            // And path matching confirms they will be routed to "Uncommitted changes" changelist
+            assertTrue(MultiBranchService.isPathMatchingStash("application.yml", stashedPaths));
+            assertTrue(MultiBranchService.isPathMatchingStash("config.json", stashedPaths));
+            assertTrue(MultiBranchService.isPathMatchingStash("pom.xml", stashedPaths));
+            assertFalse(MultiBranchService.isPathMatchingStash("target.txt", stashedPaths));
+
+        } finally {
+            try (var stream = Files.walk(tempDir)) {
+                stream.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+            } catch (Exception ignored) {}
+        }
+    }
 }
 
 

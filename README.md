@@ -29,7 +29,7 @@ An IntelliJ IDEA plugin for automating multi-branch Git workflows across target 
   - If uncommitted changes exist in other folders/changelists (e.g. `pom.xml`, local configs), the plugin safely stashes them before commit actions.
   - **Fetch Post-Action Checkout Branch**: Automatically fetches `origin/<checkoutBranch>` to update remote refs with the latest commits (including any newly pushed commits).
   - Automatically checks out the configured branch (`deploy/test` by default) after actions complete and fast-forwards to latest origin.
-  - Restores the stashed changes via `git stash pop` on top of the checkout branch.
+  - Restores the stashed changes via `git stash pop` on top of the checkout branch into a dedicated changelist named **"Uncommitted changes"** in IDEA UI (creating it if missing).
 - **Automated GitLab Merge Requests**:
   - Automatically creates Merge Requests directly via GitLab API upon successful push.
   - Automatically assigns created MRs to the authenticated user (login person) by querying `/api/v4/user`.

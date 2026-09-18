@@ -556,7 +556,7 @@ public class MultiBranchCommitDialog extends DialogWrapper {
         openMrCheckbox = new JBCheckBox("Open created MRs in browser", config.isOpenMrLinksInBrowser());
 
         stashCheckbox = new JBCheckBox("Stash other folders & pop after", config.isStashOtherChanges());
-        stashCheckbox.setToolTipText("If uncommitted changes exist in other folders, stash before commit and pop after checkout " + config.getCheckoutBranch());
+        stashCheckbox.setToolTipText("If uncommitted changes exist in other folders, stash before commit and restore to 'Uncommitted changes' changelist after checkout " + config.getCheckoutBranch());
 
         checkoutTestCheckbox = new JBCheckBox("Checkout " + config.getCheckoutBranch() + " on finish", config.isCheckoutTestAfter());
         checkoutTestCheckbox.setToolTipText("Checkout " + config.getCheckoutBranch() + " after commits/pushes are complete");

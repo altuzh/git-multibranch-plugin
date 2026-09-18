@@ -26,13 +26,18 @@ import java.io.InputStreamReader;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class MultiBranchService {
+
+    public static final String UNCOMMITTED_CHANGES_CHANGELIST_NAME = "Uncommitted changes";
 
     public static void syncDocumentsToDisk(@Nullable Project project) {
         com.intellij.openapi.application.Application app = ApplicationManager.getApplication();
@@ -62,6 +67,7 @@ public class MultiBranchService {
                 File tempPatch = null;
                 File worktreeDir = null;
                 boolean didStash = false;
+                Set<String> stashedRelativePaths = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
                 List<String> targetRelativePaths = new ArrayList<>();
 
                 try {
@@ -171,12 +177,12 @@ public class MultiBranchService {
                             statusFile = statusFile.replace('\\', '/');
                             if (!targetSet.contains(statusFile)) {
                                 hasOtherChanges = true;
-                                break;
+                                stashedRelativePaths.add(statusFile);
                             }
                         }
                     }
 
-                    MultiBranchLog.info("Working tree status check: uncommitted changes in other folders = " + hasOtherChanges);
+                    MultiBranchLog.info("Working tree status check: uncommitted changes in other folders = " + hasOtherChanges + " (" + stashedRelativePaths.size() + " files)");
 
                     // 5. If uncommitted changes exist in other folders and stash is enabled:
                     // First, revert target files from workdir so they are not stashed into other changes!
@@ -186,10 +192,28 @@ public class MultiBranchService {
                         coCmd.addAll(targetRelativePaths);
                         runGit(repoDir, coCmd.toArray(new String[0]));
 
+                        // Record exact dirty files remaining right before stashing
+                        GitResult preStashStatus = runGit(repoDir, "status", "--porcelain");
+                        if (preStashStatus.exitCode == 0) {
+                            stashedRelativePaths.clear();
+                            for (String line : preStashStatus.stdout.split("\\r?\\n")) {
+                                if (line.isBlank() || line.length() <= 3) continue;
+                                String statusFile = line.substring(3).trim();
+                                if (statusFile.startsWith("\"") && statusFile.endsWith("\"")) {
+                                    statusFile = statusFile.substring(1, statusFile.length() - 1);
+                                }
+                                if (statusFile.contains(" -> ")) {
+                                    statusFile = statusFile.substring(statusFile.indexOf(" -> ") + 4).trim();
+                                }
+                                statusFile = statusFile.replace('\\', '/');
+                                stashedRelativePaths.add(statusFile);
+                            }
+                        }
+
                         indicator.setText("Stashing uncommitted changes from other folders...");
                         GitResult stashRes = runGit(repoDir, "stash", "push", "--include-untracked", "-m", "multibranch_temp_stash_" + System.currentTimeMillis());
                         didStash = (stashRes.exitCode == 0 && !stashRes.stdout.contains("No local changes to save"));
-                        MultiBranchLog.info("Stashed other changes: didStash=" + didStash);
+                        MultiBranchLog.info("Stashed other changes: didStash=" + didStash + " (" + stashedRelativePaths.size() + " files: " + stashedRelativePaths + ")");
                     } else {
                         // Revert target files from workdir since patch is safely stored
                         List<String> coCmd = new ArrayList<>(List.of("checkout", "HEAD", "--"));
@@ -571,6 +595,25 @@ public class MultiBranchService {
                         if (popRes.exitCode != 0) {
                             MultiBranchLog.warn("Stash pop encountered a conflict: " + popRes.stderr);
                             notifyError(project, "Stash pop encountered a conflict. Your stashed changes are safely preserved in git stash list.\nError: " + popRes.stderr);
+                        } else {
+                            MultiBranchLog.info("Stash popped successfully.");
+                        }
+
+                        // Collect any files reported as dirty after stash pop
+                        GitResult postPopStatus = runGit(repoDir, "status", "--porcelain");
+                        if (postPopStatus.exitCode == 0) {
+                            for (String line : postPopStatus.stdout.split("\\r?\\n")) {
+                                if (line.isBlank() || line.length() <= 3) continue;
+                                String statusFile = line.substring(3).trim();
+                                if (statusFile.startsWith("\"") && statusFile.endsWith("\"")) {
+                                    statusFile = statusFile.substring(1, statusFile.length() - 1);
+                                }
+                                if (statusFile.contains(" -> ")) {
+                                    statusFile = statusFile.substring(statusFile.indexOf(" -> ") + 4).trim();
+                                }
+                                statusFile = statusFile.replace('\\', '/');
+                                stashedRelativePaths.add(statusFile);
+                            }
                         }
                     }
 
@@ -591,10 +634,29 @@ public class MultiBranchService {
                         }
                     });
 
-                    // Refresh IntelliJ Git state
+                    // Refresh IntelliJ Git state and restore stashed changes to "Uncommitted changes" changelist
+                    final boolean wasStashed = didStash;
+                    final Set<String> filesToRestoreToUncommitted = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+                    filesToRestoreToUncommitted.addAll(stashedRelativePaths);
+
                     ApplicationManager.getApplication().invokeLater(() -> {
-                        repository.update();
-                        VcsDirtyScopeManager.getInstance(project).markEverythingDirty();
+                        if (repository != null && repository.getRoot() != null) {
+                            repository.getRoot().refresh(true, true, () -> {
+                                repository.update();
+                                if (project != null && !project.isDisposed()) {
+                                    VcsDirtyScopeManager.getInstance(project).markEverythingDirty();
+                                    if (wasStashed) {
+                                        restoreChangesToUncommittedChangelist(project, repoDir, filesToRestoreToUncommitted);
+                                    }
+                                }
+                            });
+                        } else if (project != null && !project.isDisposed()) {
+                            repository.update();
+                            VcsDirtyScopeManager.getInstance(project).markEverythingDirty();
+                            if (wasStashed) {
+                                restoreChangesToUncommittedChangelist(project, repoDir, filesToRestoreToUncommitted);
+                            }
+                        }
                     });
 
                     // Show Result Dialog
@@ -604,6 +666,84 @@ public class MultiBranchService {
                 }
             }
         });
+    }
+
+    public static void restoreChangesToUncommittedChangelist(@Nullable Project project, @Nullable File repoDir, @Nullable Set<String> stashedRelativePaths) {
+        if (project == null || project.isDisposed()) return;
+
+        ChangeListManager clm = ChangeListManager.getInstance(project);
+        clm.invokeAfterUpdate(true, () -> {
+            if (project.isDisposed()) return;
+            try {
+                LocalChangeList targetList = null;
+                for (LocalChangeList cl : clm.getChangeLists()) {
+                    if (UNCOMMITTED_CHANGES_CHANGELIST_NAME.equalsIgnoreCase(cl.getName())) {
+                        targetList = cl;
+                        break;
+                    }
+                }
+                if (targetList == null) {
+                    targetList = clm.addChangeList(UNCOMMITTED_CHANGES_CHANGELIST_NAME, "Restored uncommitted changes from stash");
+                    MultiBranchLog.info("Created changelist '" + UNCOMMITTED_CHANGES_CHANGELIST_NAME + "' for restored uncommitted changes.");
+                }
+
+                Path repoPath = repoDir != null ? repoDir.toPath().toAbsolutePath().normalize() : null;
+                List<Change> changesToMove = new ArrayList<>();
+                for (Change change : clm.getAllChanges()) {
+                    ContentRevision rev = change.getAfterRevision() != null ? change.getAfterRevision() : change.getBeforeRevision();
+                    if (rev != null) {
+                        String fullPathStr = rev.getFile().getPath();
+                        String relPath = null;
+                        if (repoPath != null) {
+                            try {
+                                Path filePath = Paths.get(fullPathStr).toAbsolutePath().normalize();
+                                relPath = repoPath.relativize(filePath).toString().replace('\\', '/');
+                            } catch (Exception ignored) {}
+                        }
+                        if (relPath == null) {
+                            relPath = rev.getFile().getName();
+                        }
+
+                        boolean match = isPathMatchingStash(relPath, stashedRelativePaths);
+                        if (match && !targetList.getChanges().contains(change)) {
+                            changesToMove.add(change);
+                        }
+                    }
+                }
+
+                if (!changesToMove.isEmpty()) {
+                    MultiBranchLog.info("Moving " + changesToMove.size() + " restored change(s) to changelist '" + UNCOMMITTED_CHANGES_CHANGELIST_NAME + "'");
+                    clm.moveChangesTo(targetList, changesToMove);
+                } else {
+                    MultiBranchLog.info("No matching changes found to move to changelist '" + UNCOMMITTED_CHANGES_CHANGELIST_NAME + "'.");
+                }
+            } catch (Exception e) {
+                MultiBranchLog.warn("Failed to restore changes to '" + UNCOMMITTED_CHANGES_CHANGELIST_NAME + "': " + e.getMessage());
+            }
+        });
+    }
+
+    public static boolean isPathMatchingStash(String relPath, @Nullable Set<String> stashedRelativePaths) {
+        if (stashedRelativePaths == null || stashedRelativePaths.isEmpty()) {
+            return true;
+        }
+        String normRel = relPath.replace('\\', '/');
+        if (normRel.startsWith("./")) normRel = normRel.substring(2);
+        if (normRel.startsWith("/")) normRel = normRel.substring(1);
+
+        for (String stashedRel : stashedRelativePaths) {
+            String normStashed = stashedRel.replace('\\', '/');
+            if (normStashed.startsWith("./")) normStashed = normStashed.substring(2);
+            if (normStashed.startsWith("/")) normStashed = normStashed.substring(1);
+
+            if (normStashed.equalsIgnoreCase(normRel)) {
+                return true;
+            }
+            if (normStashed.endsWith("/" + normRel) || normRel.endsWith("/" + normStashed)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static void revertWorktreeAndLocalBranch(File worktreeDir, File repoDir, String branchName) {

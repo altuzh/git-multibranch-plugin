@@ -186,7 +186,7 @@ public class MultiBranchConfirmDialog extends DialogWrapper {
             pipelineBox.add(new JLabel("➔ Post-action: Checkout '" + checkoutBranch + "' on finish and fast-forward to latest origin"));
         }
         if (config.isStashOtherChanges()) {
-            pipelineBox.add(new JLabel("➔ Post-action: Restore stashed changes (git stash pop)"));
+            pipelineBox.add(new JLabel("➔ Post-action: Restore stashed changes (git stash pop) to 'Uncommitted changes' changelist"));
         }
         pipelineBox.add(new JLabel("➔ Post-action: Display full execution review window upon completion"));
 
