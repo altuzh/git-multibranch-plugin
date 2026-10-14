@@ -31,9 +31,11 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 public class MultiBranchService {
 
@@ -70,9 +72,16 @@ public class MultiBranchService {
                 Set<String> stashedRelativePaths = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
                 List<String> targetRelativePaths = new ArrayList<>();
 
+                GitResult curBranchRes = runGit(repoDir, "rev-parse", "--abbrev-ref", "HEAD");
+                String initialBranch = (curBranchRes.exitCode == 0 && !curBranchRes.stdout.isBlank()) ? curBranchRes.stdout.trim() : null;
+                if ("HEAD".equalsIgnoreCase(initialBranch)) {
+                    initialBranch = null; // detached HEAD
+                }
+
                 try {
                     MultiBranchLog.startExecution("Multi-Branch Commit & Push");
                     MultiBranchLog.info("Project: " + (project != null ? project.getName() : "null") + " | Repository: " + repoDir.getAbsolutePath());
+                    MultiBranchLog.info("Initial branch: " + (initialBranch != null ? initialBranch : "(detached)"));
                     MultiBranchLog.info("Changelist: '" + config.getChangelistName() + "' | Task Prefix: '" + config.getTaskPrefix() + "'");
                     MultiBranchLog.info("Commit Message: " + config.getFormattedCommitMessage());
                     MultiBranchLog.info("Options: fetchOrigin=" + config.isFetchOriginFirst() +
@@ -125,7 +134,7 @@ public class MultiBranchService {
                         ContentRevision rev = change.getAfterRevision() != null ? change.getAfterRevision() : change.getBeforeRevision();
                         if (rev != null) {
                             String fullPath = rev.getFile().getPath();
-                            String rel = new File(repoDir, ".").toURI().relativize(new File(fullPath).toURI()).getPath();
+                            String rel = getRelativePath(repoDir, fullPath);
                             targetRelativePaths.add(rel.replace('\\', '/'));
                         }
                     }
@@ -138,7 +147,7 @@ public class MultiBranchService {
                         return;
                     }
 
-                    // Stage intent for any new files in target list
+                    // Stage intent for any new files in target list so diff can capture untracked files
                     for (String rel : targetRelativePaths) {
                         File f = new File(repoDir, rel);
                         if (f.exists()) {
@@ -160,11 +169,18 @@ public class MultiBranchService {
                     Files.writeString(tempPatch.toPath(), diffRes.stdout, StandardCharsets.UTF_8);
                     MultiBranchLog.info("Created binary patch (" + tempPatch.length() + " bytes) at " + tempPatch.getAbsolutePath());
 
+                    // Unstage intent-to-add so index remains clean and doesn't conflict with stash or branch switching
+                    for (String rel : targetRelativePaths) {
+                        runGit(repoDir, "reset", "HEAD", "--", rel);
+                    }
+
                     // 4. Check if uncommitted changes exist in other folders / working tree
                     boolean hasOtherChanges = false;
                     GitResult statusRes = runGit(repoDir, "status", "--porcelain");
+                    List<String> otherFilesToStash = new ArrayList<>();
                     if (statusRes.exitCode == 0) {
-                        Set<String> targetSet = new HashSet<>(targetRelativePaths);
+                        Set<String> targetSet = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+                        targetSet.addAll(targetRelativePaths);
                         for (String line : statusRes.stdout.split("\\r?\\n")) {
                             if (line.isBlank() || line.length() <= 3) continue;
                             String statusFile = line.substring(3).trim();
@@ -177,48 +193,24 @@ public class MultiBranchService {
                             statusFile = statusFile.replace('\\', '/');
                             if (!targetSet.contains(statusFile)) {
                                 hasOtherChanges = true;
+                                otherFilesToStash.add(statusFile);
                                 stashedRelativePaths.add(statusFile);
                             }
                         }
                     }
 
-                    MultiBranchLog.info("Working tree status check: uncommitted changes in other folders = " + hasOtherChanges + " (" + stashedRelativePaths.size() + " files)");
+                    MultiBranchLog.info("Working tree status check: uncommitted changes in other folders = " + hasOtherChanges + " (" + stashedRelativePaths.size() + " files: " + stashedRelativePaths + ")");
 
-                    // 5. If uncommitted changes exist in other folders and stash is enabled:
-                    // First, revert target files from workdir so they are not stashed into other changes!
+                    // 5. If uncommitted changes exist in other folders and stash is enabled, stash ONLY the other files!
+                    // We deliberately do NOT revert or stash targetRelativePaths here:
+                    // If an error happens during worktree creation or branch execution, the target files remain safely intact in working tree.
                     if (hasOtherChanges && config.isStashOtherChanges()) {
-                        indicator.setText("Reverting target changes locally before stashing other folders...");
-                        List<String> coCmd = new ArrayList<>(List.of("checkout", "HEAD", "--"));
-                        coCmd.addAll(targetRelativePaths);
-                        runGit(repoDir, coCmd.toArray(new String[0]));
-
-                        // Record exact dirty files remaining right before stashing
-                        GitResult preStashStatus = runGit(repoDir, "status", "--porcelain");
-                        if (preStashStatus.exitCode == 0) {
-                            stashedRelativePaths.clear();
-                            for (String line : preStashStatus.stdout.split("\\r?\\n")) {
-                                if (line.isBlank() || line.length() <= 3) continue;
-                                String statusFile = line.substring(3).trim();
-                                if (statusFile.startsWith("\"") && statusFile.endsWith("\"")) {
-                                    statusFile = statusFile.substring(1, statusFile.length() - 1);
-                                }
-                                if (statusFile.contains(" -> ")) {
-                                    statusFile = statusFile.substring(statusFile.indexOf(" -> ") + 4).trim();
-                                }
-                                statusFile = statusFile.replace('\\', '/');
-                                stashedRelativePaths.add(statusFile);
-                            }
-                        }
-
                         indicator.setText("Stashing uncommitted changes from other folders...");
-                        GitResult stashRes = runGit(repoDir, "stash", "push", "--include-untracked", "-m", "multibranch_temp_stash_" + System.currentTimeMillis());
+                        List<String> stashCmd = new ArrayList<>(List.of("stash", "push", "--include-untracked", "-m", "multibranch_temp_stash_" + System.currentTimeMillis(), "--"));
+                        stashCmd.addAll(otherFilesToStash);
+                        GitResult stashRes = runGit(repoDir, stashCmd.toArray(new String[0]));
                         didStash = (stashRes.exitCode == 0 && !stashRes.stdout.contains("No local changes to save"));
                         MultiBranchLog.info("Stashed other changes: didStash=" + didStash + " (" + stashedRelativePaths.size() + " files: " + stashedRelativePaths + ")");
-                    } else {
-                        // Revert target files from workdir since patch is safely stored
-                        List<String> coCmd = new ArrayList<>(List.of("checkout", "HEAD", "--"));
-                        coCmd.addAll(targetRelativePaths);
-                        runGit(repoDir, coCmd.toArray(new String[0]));
                     }
 
                     // 6. Create detached worktree
@@ -552,39 +544,70 @@ public class MultiBranchService {
                         MultiBranchLog.info("Deleted temporary patch file.");
                     }
 
-                    // If staying on current branch, sync working tree with HEAD in case current branch was committed to
-                    if (!config.isCheckoutTestAfter()) {
-                        runGit(repoDir, "reset", "--hard", "HEAD");
-                    }
+                    boolean anyCommitSucceeded = results.stream().anyMatch(MultiBranchResultItem::isSuccess);
+                    Set<String> targetSet = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+                    targetSet.addAll(targetRelativePaths);
 
-                    // Checkout configured branch after actions
-                    String targetBranch = config.getCheckoutBranch();
-                    if (targetBranch == null || targetBranch.isBlank()) {
-                        targetBranch = "deploy/test";
-                    } else {
-                        targetBranch = targetBranch.trim();
-                    }
-                    if (targetBranch.startsWith("origin/")) {
-                        targetBranch = targetBranch.substring("origin/".length());
-                    }
+                    if (anyCommitSucceeded) {
+                        // The changes were committed to target branches.
+                        // Ensure repoDir is clean and committed files are NOT resurrected.
+                        Set<String> successfulBranchNames = results.stream()
+                                .filter(MultiBranchResultItem::isSuccess)
+                                .map(MultiBranchResultItem::getBranchName)
+                                .filter(Objects::nonNull)
+                                .collect(Collectors.toSet());
 
-                    // Also fetch post action checkout branch
-                    indicator.setText("Fetching post-action checkout branch '" + targetBranch + "' from origin...");
-                    runGit(repoDir, "fetch", "origin", targetBranch);
+                        boolean initialBranchWasCommitted = (initialBranch != null && successfulBranchNames.contains(initialBranch));
 
-                    if (config.isCheckoutTestAfter()) {
-                        indicator.setText("Checking out " + targetBranch + "...");
-                        MultiBranchLog.info("Checking out post-action branch: " + targetBranch);
-                        GitResult coTest = runGit(repoDir, "checkout", targetBranch);
-                        if (coTest.exitCode != 0) {
-                            coTest = runGit(repoDir, "checkout", "-B", targetBranch, "origin/" + targetBranch);
-                            if (coTest.exitCode != 0) {
-                                runGit(repoDir, "checkout", "origin/" + targetBranch);
-                            }
+                        if (initialBranchWasCommitted) {
+                            // initialBranch was updated by the worktree commit to the new HEAD.
+                            // Reset hard to HEAD syncs repoDir's working tree and index to the new commit cleanly!
+                            runGit(repoDir, "reset", "--hard", "HEAD");
                         } else {
-                            // Fast-forward to match latest origin if commits were merged
-                            runGit(repoDir, "merge", "--ff-only", "origin/" + targetBranch);
+                            // Target files were committed to other branches, not to initialBranch.
+                            // Revert them on initialBranch so they don't remain dirty.
+                            for (String rel : targetRelativePaths) {
+                                runGit(repoDir, "checkout", "HEAD", "--", rel);
+                                File f = new File(repoDir, rel);
+                                GitResult statusF = runGit(repoDir, "status", "--porcelain", "--", rel);
+                                if (statusF.exitCode == 0 && statusF.stdout.contains("??")) {
+                                    f.delete();
+                                }
+                            }
+                            runGit(repoDir, "reset", "--hard", "HEAD");
                         }
+
+                        // Post-action checkout if enabled
+                        if (config.isCheckoutTestAfter()) {
+                            String targetBranch = config.getCheckoutBranch();
+                            if (targetBranch == null || targetBranch.isBlank()) {
+                                targetBranch = "deploy/test";
+                            } else {
+                                targetBranch = targetBranch.trim();
+                            }
+                            if (targetBranch.startsWith("origin/")) {
+                                targetBranch = targetBranch.substring("origin/".length());
+                            }
+
+                            // Also fetch post action checkout branch
+                            indicator.setText("Fetching post-action checkout branch '" + targetBranch + "' from origin...");
+                            runGit(repoDir, "fetch", "origin", targetBranch);
+
+                            indicator.setText("Checking out " + targetBranch + "...");
+                            MultiBranchLog.info("Checking out post-action branch: " + targetBranch);
+                            GitResult coTest = runGit(repoDir, "checkout", targetBranch);
+                            if (coTest.exitCode != 0) {
+                                coTest = runGit(repoDir, "checkout", "-B", targetBranch, "origin/" + targetBranch);
+                                if (coTest.exitCode != 0) {
+                                    runGit(repoDir, "checkout", "origin/" + targetBranch);
+                                }
+                            } else {
+                                // Fast-forward to match latest origin if commits were merged
+                                runGit(repoDir, "merge", "--ff-only", "origin/" + targetBranch);
+                            }
+                        }
+                    } else {
+                        MultiBranchLog.warn("No branch commits succeeded; keeping modified files in working directory so changes are not lost.");
                     }
 
                     // Stash pop if stashed
@@ -599,7 +622,7 @@ public class MultiBranchService {
                             MultiBranchLog.info("Stash popped successfully.");
                         }
 
-                        // Collect any files reported as dirty after stash pop
+                        // Collect any files reported as dirty after stash pop, EXCLUDING any committed target files
                         GitResult postPopStatus = runGit(repoDir, "status", "--porcelain");
                         if (postPopStatus.exitCode == 0) {
                             for (String line : postPopStatus.stdout.split("\\r?\\n")) {
@@ -612,7 +635,37 @@ public class MultiBranchService {
                                     statusFile = statusFile.substring(statusFile.indexOf(" -> ") + 4).trim();
                                 }
                                 statusFile = statusFile.replace('\\', '/');
-                                stashedRelativePaths.add(statusFile);
+                                if (!anyCommitSucceeded || !targetSet.contains(statusFile)) {
+                                    stashedRelativePaths.add(statusFile);
+                                }
+                            }
+                        }
+                    }
+
+                    // Safety net: ensure NO committed file is dirty after post-action checkout or stash pop
+                    if (anyCommitSucceeded) {
+                        GitResult postStatus = runGit(repoDir, "status", "--porcelain");
+                        if (postStatus.exitCode == 0 && !postStatus.stdout.isBlank()) {
+                            for (String line : postStatus.stdout.split("\\r?\\n")) {
+                                if (line.isBlank() || line.length() <= 3) continue;
+                                String statusFile = line.substring(3).trim();
+                                if (statusFile.startsWith("\"") && statusFile.endsWith("\"")) {
+                                    statusFile = statusFile.substring(1, statusFile.length() - 1);
+                                }
+                                if (statusFile.contains(" -> ")) {
+                                    statusFile = statusFile.substring(statusFile.indexOf(" -> ") + 4).trim();
+                                }
+                                statusFile = statusFile.replace('\\', '/');
+
+                                if (targetSet.contains(statusFile)) {
+                                    MultiBranchLog.warn("Committed file '" + statusFile + "' was dirty in working tree after execution. Cleaning it up.");
+                                    runGit(repoDir, "checkout", "HEAD", "--", statusFile);
+                                    File f = new File(repoDir, statusFile);
+                                    GitResult checkUntracked = runGit(repoDir, "status", "--porcelain", "--", statusFile);
+                                    if (checkUntracked.exitCode == 0 && checkUntracked.stdout.contains("??")) {
+                                        f.delete();
+                                    }
+                                }
                             }
                         }
                     }
@@ -636,8 +689,13 @@ public class MultiBranchService {
 
                     // Refresh IntelliJ Git state and restore stashed changes to "Uncommitted changes" changelist
                     final boolean wasStashed = didStash;
+                    final Set<String> committedFiles = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+                    if (anyCommitSucceeded) {
+                        committedFiles.addAll(targetRelativePaths);
+                    }
                     final Set<String> filesToRestoreToUncommitted = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
                     filesToRestoreToUncommitted.addAll(stashedRelativePaths);
+                    filesToRestoreToUncommitted.removeAll(committedFiles);
 
                     ApplicationManager.getApplication().invokeLater(() -> {
                         if (repository != null && repository.getRoot() != null) {
@@ -646,7 +704,7 @@ public class MultiBranchService {
                                 if (project != null && !project.isDisposed()) {
                                     VcsDirtyScopeManager.getInstance(project).markEverythingDirty();
                                     if (wasStashed) {
-                                        restoreChangesToUncommittedChangelist(project, repoDir, filesToRestoreToUncommitted);
+                                        restoreChangesToUncommittedChangelist(project, repoDir, filesToRestoreToUncommitted, committedFiles);
                                     }
                                 }
                             });
@@ -654,7 +712,7 @@ public class MultiBranchService {
                             repository.update();
                             VcsDirtyScopeManager.getInstance(project).markEverythingDirty();
                             if (wasStashed) {
-                                restoreChangesToUncommittedChangelist(project, repoDir, filesToRestoreToUncommitted);
+                                restoreChangesToUncommittedChangelist(project, repoDir, filesToRestoreToUncommitted, committedFiles);
                             }
                         }
                     });
@@ -669,7 +727,16 @@ public class MultiBranchService {
     }
 
     public static void restoreChangesToUncommittedChangelist(@Nullable Project project, @Nullable File repoDir, @Nullable Set<String> stashedRelativePaths) {
+        restoreChangesToUncommittedChangelist(project, repoDir, stashedRelativePaths, null);
+    }
+
+    public static void restoreChangesToUncommittedChangelist(
+            @Nullable Project project,
+            @Nullable File repoDir,
+            @Nullable Set<String> stashedRelativePaths,
+            @Nullable Set<String> committedRelativePaths) {
         if (project == null || project.isDisposed()) return;
+        if (stashedRelativePaths == null || stashedRelativePaths.isEmpty()) return;
 
         ChangeListManager clm = ChangeListManager.getInstance(project);
         clm.invokeAfterUpdate(true, () -> {
@@ -687,21 +754,19 @@ public class MultiBranchService {
                     MultiBranchLog.info("Created changelist '" + UNCOMMITTED_CHANGES_CHANGELIST_NAME + "' for restored uncommitted changes.");
                 }
 
-                Path repoPath = repoDir != null ? repoDir.toPath().toAbsolutePath().normalize() : null;
                 List<Change> changesToMove = new ArrayList<>();
                 for (Change change : clm.getAllChanges()) {
                     ContentRevision rev = change.getAfterRevision() != null ? change.getAfterRevision() : change.getBeforeRevision();
                     if (rev != null) {
                         String fullPathStr = rev.getFile().getPath();
-                        String relPath = null;
-                        if (repoPath != null) {
-                            try {
-                                Path filePath = Paths.get(fullPathStr).toAbsolutePath().normalize();
-                                relPath = repoPath.relativize(filePath).toString().replace('\\', '/');
-                            } catch (Exception ignored) {}
-                        }
+                        String relPath = getRelativePath(repoDir, fullPathStr);
                         if (relPath == null) {
                             relPath = rev.getFile().getName();
+                        }
+
+                        // Never restore files that have been committed
+                        if (committedRelativePaths != null && !committedRelativePaths.isEmpty() && isPathMatchingStash(relPath, committedRelativePaths)) {
+                            continue;
                         }
 
                         boolean match = isPathMatchingStash(relPath, stashedRelativePaths);
@@ -721,6 +786,30 @@ public class MultiBranchService {
                 MultiBranchLog.warn("Failed to restore changes to '" + UNCOMMITTED_CHANGES_CHANGELIST_NAME + "': " + e.getMessage());
             }
         });
+    }
+
+    public static String getRelativePath(@Nullable File repoDir, @Nullable String fullPath) {
+        if (repoDir == null || fullPath == null) return fullPath;
+        try {
+            Path repoPath = repoDir.getCanonicalFile().toPath();
+            Path filePath = new File(fullPath).getCanonicalFile().toPath();
+            if (filePath.startsWith(repoPath)) {
+                return repoPath.relativize(filePath).toString().replace('\\', '/');
+            }
+        } catch (Exception ignored) {}
+        try {
+            Path repoPath = repoDir.toPath().toAbsolutePath().normalize();
+            Path filePath = Paths.get(fullPath).toAbsolutePath().normalize();
+            if (filePath.startsWith(repoPath)) {
+                return repoPath.relativize(filePath).toString().replace('\\', '/');
+            }
+        } catch (Exception ignored) {}
+        String normRepo = repoDir.getAbsolutePath().replace('\\', '/').replaceAll("/+$", "");
+        String normFull = fullPath.replace('\\', '/');
+        if (normFull.toLowerCase().startsWith(normRepo.toLowerCase() + "/")) {
+            return normFull.substring(normRepo.length() + 1);
+        }
+        return normFull;
     }
 
     public static boolean isPathMatchingStash(String relPath, @Nullable Set<String> stashedRelativePaths) {
