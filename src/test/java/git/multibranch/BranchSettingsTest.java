@@ -1529,17 +1529,24 @@ public class BranchSettingsTest {
             MultiBranchService.runGit(repo, "add", "target.txt");
             MultiBranchService.runGit(repo, "commit", "-m", "add target");
 
-            // Changes on main: target.txt modified, other.txt modified
+            // Changes on main: target.txt modified, sub/newTarget.txt newly added, other.txt modified
             Files.writeString(targetFile.toPath(), "target v2-modified");
+            File subDir = new File(repo, "sub");
+            subDir.mkdirs();
+            File newTarget = new File(subDir, "newTarget.txt");
+            Files.writeString(newTarget.toPath(), "new file content");
+
             File otherFile = new File(repo, "other.txt");
             Files.writeString(otherFile.toPath(), "other uncommitted");
 
-            List<String> targetRelativePaths = List.of("target.txt");
+            List<String> targetRelativePaths = List.of("target.txt", "sub/newTarget.txt");
 
             // Diff
+            MultiBranchService.runGit(repo, "add", "-N", "--", "sub/newTarget.txt");
             File patchFile = File.createTempFile("test_sim_patch_", ".patch");
-            var diffRes = MultiBranchService.runGit(repo, "diff", "HEAD", "--binary", "--", "target.txt");
+            var diffRes = MultiBranchService.runGit(repo, "diff", "HEAD", "--binary", "--", "target.txt", "sub/newTarget.txt");
             Files.writeString(patchFile.toPath(), diffRes.stdout);
+            MultiBranchService.runGit(repo, "reset", "HEAD", "--", "sub/newTarget.txt");
 
             // Stash other files
             List<String> otherFiles = List.of("other.txt");
@@ -1556,33 +1563,55 @@ public class BranchSettingsTest {
 
             // Commit succeeded!
             // Clean target files on initialBranch ('main'), because they were committed to TASK-101-dev:
-            MultiBranchService.runGit(repo, "checkout", "HEAD", "--", "target.txt");
+            for (String rel : targetRelativePaths) {
+                MultiBranchService.runGit(repo, "reset", "HEAD", "--", rel);
+                MultiBranchService.runGit(repo, "checkout", "HEAD", "--", rel);
+                MultiBranchService.runGit(repo, "clean", "-fd", "--", rel);
+                try {
+                    File f = new File(repo, rel);
+                    if (f.exists()) {
+                        Files.deleteIfExists(f.toPath());
+                    }
+                } catch (Exception ignored) {}
+            }
+            MultiBranchService.runGit(repo, "reset", "--hard", "HEAD");
 
-            // Checkout deploy/test
+            // Checkout deploy/test (parent branch)
             MultiBranchService.runGit(repo, "checkout", "deploy/test");
 
-            // Pop stash
+            // Pop stash onto deploy/test
             MultiBranchService.runGit(repo, "stash", "pop");
+
+            // On deploy/test (parent branch): target files MUST NOT be dirty or present!
+            var statusDeploy = MultiBranchService.runGit(repo, "status", "--porcelain", "-uall");
+            assertFalse(statusDeploy.stdout.contains("target.txt"));
+            assertFalse(statusDeploy.stdout.contains("newTarget.txt"));
+            assertTrue(statusDeploy.stdout.contains("other.txt"));
+            assertFalse(newTarget.exists());
 
             // Switch to TASK-101-dev (the committed branch)
             var coDev = MultiBranchService.runGit(repo, "checkout", "TASK-101-dev");
             assertEquals(0, coDev.exitCode);
 
-            // On TASK-101-dev: target.txt is committed (clean), other.txt is uncommitted
-            var statusDev = MultiBranchService.runGit(repo, "status", "--porcelain");
+            // On TASK-101-dev: target.txt and newTarget.txt are committed (clean), other.txt is uncommitted
+            var statusDev = MultiBranchService.runGit(repo, "status", "--porcelain", "-uall");
             assertFalse(statusDev.stdout.contains("target.txt"));
+            assertFalse(statusDev.stdout.contains("newTarget.txt"));
             assertTrue(statusDev.stdout.contains("other.txt"));
             assertEquals("target v2-modified", Files.readString(targetFile.toPath()));
+            assertTrue(newTarget.exists());
+            assertEquals("new file content", Files.readString(newTarget.toPath()));
 
-            // Now switch to initial branch ('main')
-            var coInitial = MultiBranchService.runGit(repo, "checkout", initialBranch);
-            assertEquals(0, coInitial.exitCode);
+            // Now switch to parent branch ('deploy/test')
+            var coParent = MultiBranchService.runGit(repo, "checkout", "deploy/test");
+            assertEquals(0, coParent.exitCode);
 
-            // On initialBranch ('main'): target.txt is NOT resurrected, only other.txt returned
-            var statusMain = MultiBranchService.runGit(repo, "status", "--porcelain");
-            assertFalse(statusMain.stdout.contains("target.txt"));
-            assertTrue(statusMain.stdout.contains("other.txt"));
-            assertEquals("target v1", Files.readString(targetFile.toPath()));
+            // On parent branch: committed files MUST NOT appear in changes!
+            var statusParent = MultiBranchService.runGit(repo, "status", "--porcelain", "-uall");
+            assertFalse(statusParent.stdout.contains("target.txt"));
+            assertFalse(statusParent.stdout.contains("newTarget.txt"));
+            assertTrue(statusParent.stdout.contains("other.txt"));
+            assertFalse(newTarget.exists());
 
         } finally {
             try (var s = Files.walk(tempDir)) {

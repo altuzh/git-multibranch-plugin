@@ -66,18 +66,18 @@ tasks.register('installToRunningIde') {
             return
         }
 
-        def jbDir = new File(appData, 'JetBrains')
-        if (!jbDir.exists()) {
-            println "[Local Install] JetBrains directory not found in APPDATA (${jbDir}), skipping."
+        def baseDirs = [new File(appData, 'JetBrains'), new File(appData, 'OpenIDE')].findAll { it.exists() }
+        if (baseDirs.isEmpty()) {
+            println "[Local Install] Neither JetBrains nor OpenIDE directory found in APPDATA, skipping."
             return
         }
 
-        // Detect running JetBrains processes
+        // Detect running JetBrains/OpenIDE processes
         def runningProcesses = []
         try {
             ProcessHandle.allProcesses().each { ph ->
                 def cmd = ph.info().command().orElse('').toLowerCase()
-                if (cmd.contains('idea64') || cmd.contains('idea.exe') || cmd.contains('webstorm')) {
+                if (cmd.contains('idea64') || cmd.contains('idea.exe') || cmd.contains('webstorm') || cmd.contains('pycharm') || cmd.contains('openide')) {
                     def name = cmd.substring(Math.max(0, Math.max(cmd.lastIndexOf('/'), cmd.lastIndexOf('\\')) + 1))
                     runningProcesses.add(name)
                 }
@@ -87,46 +87,48 @@ tasks.register('installToRunningIde') {
         if (!runningProcesses.isEmpty()) {
             println "[Local Install] Detected running IDE: ${runningProcesses.unique().join(', ')}"
         } else {
-            println "[Local Install] No running IDE detected; installing to installed JetBrains IDE directories."
+            println "[Local Install] No running IDE detected; installing to installed JetBrains/OpenIDE directories."
         }
 
         def jarFile = jar.archiveFile.get().asFile
         int installedCount = 0
 
-        jbDir.listFiles().each { ideDir ->
-            if (ideDir.isDirectory() && (ideDir.name.contains('Idea') || ideDir.name.contains('WebStorm') || ideDir.name.contains('PyCharm'))) {
-                def pluginLib = new File(ideDir, "plugins/git-multibranch-plugin/lib")
-                if (pluginLib.exists() || new File(ideDir, "plugins").exists()) {
-                    if (!pluginLib.exists()) {
-                        pluginLib.mkdirs()
-                    }
-                    def destFile = new File(pluginLib, "git-multibranch-plugin-${project.version}.jar")
-                    try {
-                        java.nio.file.Files.copy(jarFile.toPath(), destFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-                        println "[Local Install] Installed to: ${ideDir.name} (${destFile.name})"
-                        installedCount++
-                    } catch (Exception ex) {
-                        // Direct copy locked by running JVM (mapped memory section), rename then copy
-                        def oldFile = new File(pluginLib, "git-multibranch-plugin-${project.version}.jar.old")
-                        if (oldFile.exists()) {
-                            oldFile.delete()
+        baseDirs.each { bDir ->
+            bDir.listFiles().each { ideDir ->
+                if (ideDir.isDirectory() && (ideDir.name.contains('Idea') || ideDir.name.contains('WebStorm') || ideDir.name.contains('PyCharm') || ideDir.name.contains('OpenIDE'))) {
+                    def pluginLib = new File(ideDir, "plugins/git-multibranch-plugin/lib")
+                    if (pluginLib.exists() || new File(ideDir, "plugins").exists()) {
+                        if (!pluginLib.exists()) {
+                            pluginLib.mkdirs()
                         }
-                        if (destFile.renameTo(oldFile)) {
+                        def destFile = new File(pluginLib, "git-multibranch-plugin-${project.version}.jar")
+                        try {
                             java.nio.file.Files.copy(jarFile.toPath(), destFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-                            println "[Local Install] Installed to running ${ideDir.name} via atomic rename (${destFile.name})"
+                            println "[Local Install] Installed to: ${ideDir.name} (${destFile.name})"
                             installedCount++
-                        } else {
-                            println "[Local Install] Warning: Failed to replace file in ${ideDir.name}: ${ex.message}"
+                        } catch (Exception ex) {
+                            // Direct copy locked by running JVM (mapped memory section), rename then copy
+                            def oldFile = new File(pluginLib, "git-multibranch-plugin-${project.version}.jar.old")
+                            if (oldFile.exists()) {
+                                oldFile.delete()
+                            }
+                            if (destFile.renameTo(oldFile)) {
+                                java.nio.file.Files.copy(jarFile.toPath(), destFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                                println "[Local Install] Installed to running ${ideDir.name} via atomic rename (${destFile.name})"
+                                installedCount++
+                            } else {
+                                println "[Local Install] Warning: Failed to replace file in ${ideDir.name}: ${ex.message}"
+                            }
                         }
-                    }
 
-                    // Retire any other jar versions in the lib directory
-                    pluginLib.listFiles().each { f ->
-                        if (f.name.endsWith('.jar') && f.name != destFile.name) {
-                            def retired = new File(pluginLib, f.name + ".old")
-                            if (retired.exists()) retired.delete()
-                            if (!f.renameTo(retired)) {
-                                try { f.delete() } catch (Exception ignored) {}
+                        // Retire any other jar versions in the lib directory
+                        pluginLib.listFiles().each { f ->
+                            if (f.name.endsWith('.jar') && f.name != destFile.name) {
+                                def retired = new File(pluginLib, f.name + ".old")
+                                if (retired.exists()) retired.delete()
+                                if (!f.renameTo(retired)) {
+                                    try { f.delete() } catch (Exception ignored) {}
+                                }
                             }
                         }
                     }

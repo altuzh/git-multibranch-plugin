@@ -176,7 +176,7 @@ public class MultiBranchService {
 
                     // 4. Check if uncommitted changes exist in other folders / working tree
                     boolean hasOtherChanges = false;
-                    GitResult statusRes = runGit(repoDir, "status", "--porcelain");
+                    GitResult statusRes = runGit(repoDir, "status", "--porcelain", "-uall");
                     List<String> otherFilesToStash = new ArrayList<>();
                     if (statusRes.exitCode == 0) {
                         Set<String> targetSet = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
@@ -191,7 +191,7 @@ public class MultiBranchService {
                                 statusFile = statusFile.substring(statusFile.indexOf(" -> ") + 4).trim();
                             }
                             statusFile = statusFile.replace('\\', '/');
-                            if (!targetSet.contains(statusFile)) {
+                            if (!targetSet.contains(statusFile) && !isPathMatchingStash(statusFile, targetSet)) {
                                 hasOtherChanges = true;
                                 otherFilesToStash.add(statusFile);
                                 stashedRelativePaths.add(statusFile);
@@ -567,12 +567,15 @@ public class MultiBranchService {
                             // Target files were committed to other branches, not to initialBranch.
                             // Revert them on initialBranch so they don't remain dirty.
                             for (String rel : targetRelativePaths) {
+                                runGit(repoDir, "reset", "HEAD", "--", rel);
                                 runGit(repoDir, "checkout", "HEAD", "--", rel);
-                                File f = new File(repoDir, rel);
-                                GitResult statusF = runGit(repoDir, "status", "--porcelain", "--", rel);
-                                if (statusF.exitCode == 0 && statusF.stdout.contains("??")) {
-                                    f.delete();
-                                }
+                                runGit(repoDir, "clean", "-fd", "--", rel);
+                                try {
+                                    File f = new File(repoDir, rel);
+                                    if (f.exists()) {
+                                        Files.deleteIfExists(f.toPath());
+                                    }
+                                } catch (Exception ignored) {}
                             }
                             runGit(repoDir, "reset", "--hard", "HEAD");
                         }
@@ -623,7 +626,7 @@ public class MultiBranchService {
                         }
 
                         // Collect any files reported as dirty after stash pop, EXCLUDING any committed target files
-                        GitResult postPopStatus = runGit(repoDir, "status", "--porcelain");
+                        GitResult postPopStatus = runGit(repoDir, "status", "--porcelain", "-uall");
                         if (postPopStatus.exitCode == 0) {
                             for (String line : postPopStatus.stdout.split("\\r?\\n")) {
                                 if (line.isBlank() || line.length() <= 3) continue;
@@ -635,7 +638,7 @@ public class MultiBranchService {
                                     statusFile = statusFile.substring(statusFile.indexOf(" -> ") + 4).trim();
                                 }
                                 statusFile = statusFile.replace('\\', '/');
-                                if (!anyCommitSucceeded || !targetSet.contains(statusFile)) {
+                                if (!anyCommitSucceeded || (!targetSet.contains(statusFile) && !isPathMatchingStash(statusFile, targetSet))) {
                                     stashedRelativePaths.add(statusFile);
                                 }
                             }
@@ -644,7 +647,7 @@ public class MultiBranchService {
 
                     // Safety net: ensure NO committed file is dirty after post-action checkout or stash pop
                     if (anyCommitSucceeded) {
-                        GitResult postStatus = runGit(repoDir, "status", "--porcelain");
+                        GitResult postStatus = runGit(repoDir, "status", "--porcelain", "-uall");
                         if (postStatus.exitCode == 0 && !postStatus.stdout.isBlank()) {
                             for (String line : postStatus.stdout.split("\\r?\\n")) {
                                 if (line.isBlank() || line.length() <= 3) continue;
@@ -657,14 +660,17 @@ public class MultiBranchService {
                                 }
                                 statusFile = statusFile.replace('\\', '/');
 
-                                if (targetSet.contains(statusFile)) {
+                                if (targetSet.contains(statusFile) || isPathMatchingStash(statusFile, targetSet)) {
                                     MultiBranchLog.warn("Committed file '" + statusFile + "' was dirty in working tree after execution. Cleaning it up.");
+                                    runGit(repoDir, "reset", "HEAD", "--", statusFile);
                                     runGit(repoDir, "checkout", "HEAD", "--", statusFile);
-                                    File f = new File(repoDir, statusFile);
-                                    GitResult checkUntracked = runGit(repoDir, "status", "--porcelain", "--", statusFile);
-                                    if (checkUntracked.exitCode == 0 && checkUntracked.stdout.contains("??")) {
-                                        f.delete();
-                                    }
+                                    runGit(repoDir, "clean", "-fd", "--", statusFile);
+                                    try {
+                                        File f = new File(repoDir, statusFile);
+                                        if (f.exists()) {
+                                            Files.deleteIfExists(f.toPath());
+                                        }
+                                    } catch (Exception ignored) {}
                                 }
                             }
                         }
@@ -697,25 +703,39 @@ public class MultiBranchService {
                     filesToRestoreToUncommitted.addAll(stashedRelativePaths);
                     filesToRestoreToUncommitted.removeAll(committedFiles);
 
-                    ApplicationManager.getApplication().invokeLater(() -> {
-                        if (repository != null && repository.getRoot() != null) {
-                            repository.getRoot().refresh(true, true, () -> {
-                                repository.update();
-                                if (project != null && !project.isDisposed()) {
-                                    VcsDirtyScopeManager.getInstance(project).markEverythingDirty();
-                                    if (wasStashed) {
-                                        restoreChangesToUncommittedChangelist(project, repoDir, filesToRestoreToUncommitted, committedFiles);
-                                    }
+                    // 1. Safe to update GitRepository on current background thread (avoids EDT assertion)
+                    if (repository != null) {
+                        try {
+                            repository.update();
+                        } catch (Exception e) {
+                            MultiBranchLog.warn("Failed to update git repository on background thread: " + e.getMessage());
+                        }
+                    }
+
+                    // 2. Refresh VFS and dirty scopes
+                    if (repository != null && repository.getRoot() != null) {
+                        repository.getRoot().refresh(true, true, () -> {
+                            // postRunnable runs on EDT: offload repository.update() to a pooled background thread
+                            ApplicationManager.getApplication().executeOnPooledThread(() -> {
+                                if (repository != null) {
+                                    try {
+                                        repository.update();
+                                    } catch (Exception ignored) {}
                                 }
                             });
-                        } else if (project != null && !project.isDisposed()) {
-                            repository.update();
-                            VcsDirtyScopeManager.getInstance(project).markEverythingDirty();
-                            if (wasStashed) {
-                                restoreChangesToUncommittedChangelist(project, repoDir, filesToRestoreToUncommitted, committedFiles);
+                            if (project != null && !project.isDisposed()) {
+                                VcsDirtyScopeManager.getInstance(project).markEverythingDirty();
+                                if (wasStashed) {
+                                    restoreChangesToUncommittedChangelist(project, repoDir, filesToRestoreToUncommitted, committedFiles);
+                                }
                             }
+                        });
+                    } else if (project != null && !project.isDisposed()) {
+                        VcsDirtyScopeManager.getInstance(project).markEverythingDirty();
+                        if (wasStashed) {
+                            restoreChangesToUncommittedChangelist(project, repoDir, filesToRestoreToUncommitted, committedFiles);
                         }
-                    });
+                    }
 
                     // Show Result Dialog
                     ApplicationManager.getApplication().invokeLater(() -> {
