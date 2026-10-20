@@ -1,0 +1,253 @@
+package git.multibranch;
+
+import com.intellij.openapi.project.Project;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.ArrayList;
+import java.util.List;
+
+public class MultiBranchConfig {
+    private String taskPrefix = "";
+    private String commitMessage = "";
+    private boolean prefixMessageWithTask = true;
+    private String changelistName = "Changes";
+    private final List<BranchMapping> branchMappings = new ArrayList<>();
+    private boolean fetchOriginFirst = true;
+    private boolean pushAfterCommit = true;
+    private boolean premergeTargetBranch = true;
+    private boolean generateMrLinks = true;
+    private boolean openMrLinksInBrowser = true;
+    private boolean stashOtherChanges = true;
+    private boolean checkoutTestAfter = true;
+    private String checkoutBranch = "deploy/test";
+    private boolean gitLabCreateMr = true;
+    private boolean gitLabAssignToMe = true;
+    private boolean gitLabDeleteSourceBranch = true;
+    private boolean gitLabSquashCommits = true;
+    private String gitLabHost = "";
+    private String gitLabApiToken = "";
+
+    public MultiBranchConfig() {
+        branchMappings.add(new BranchMapping("origin/deploy/dev", "deploy/dev", "-dev", true));
+        branchMappings.add(new BranchMapping("origin/deploy/test", "deploy/test", "-test", true));
+        branchMappings.add(new BranchMapping("origin/merge_to_uat", "merge_to_uat", "-uat", true));
+        branchMappings.add(new BranchMapping("origin/merge_to_prod", "merge_to_prod", "-prod", true));
+    }
+
+    public static MultiBranchConfig fromSettings(MultiBranchSettings settings) {
+        return fromSettings(settings, null);
+    }
+
+    public static MultiBranchConfig fromSettings(MultiBranchSettings settings, @Nullable Project project) {
+        if (settings == null || settings.getState() == null) {
+            return new MultiBranchConfig();
+        }
+        return settings.toConfig(project);
+    }
+
+    public MultiBranchConfig copy() {
+        MultiBranchConfig copy = new MultiBranchConfig();
+        copy.setTaskPrefix(this.taskPrefix);
+        copy.setCommitMessage(this.commitMessage);
+        copy.setPrefixMessageWithTask(this.prefixMessageWithTask);
+        copy.setChangelistName(this.changelistName);
+        copy.getBranchMappings().clear();
+        for (BranchMapping mapping : this.branchMappings) {
+            copy.getBranchMappings().add(mapping.copy());
+        }
+        copy.setFetchOriginFirst(this.fetchOriginFirst);
+        copy.setPushAfterCommit(this.pushAfterCommit);
+        copy.setPremergeTargetBranch(this.premergeTargetBranch);
+        copy.setGenerateMrLinks(this.generateMrLinks);
+        copy.setOpenMrLinksInBrowser(this.openMrLinksInBrowser);
+        copy.setStashOtherChanges(this.stashOtherChanges);
+        copy.setCheckoutTestAfter(this.checkoutTestAfter);
+        copy.setCheckoutBranch(this.checkoutBranch);
+        copy.setGitLabCreateMr(this.gitLabCreateMr);
+        copy.setGitLabAssignToMe(this.gitLabAssignToMe);
+        copy.setGitLabDeleteSourceBranch(this.gitLabDeleteSourceBranch);
+        copy.setGitLabSquashCommits(this.gitLabSquashCommits);
+        copy.setGitLabHost(this.gitLabHost);
+        copy.setGitLabApiToken(this.gitLabApiToken);
+        return copy;
+    }
+
+    public String getFormattedCommitMessage() {
+        String msg = commitMessage != null ? commitMessage.trim() : "";
+        if (prefixMessageWithTask && taskPrefix != null && !taskPrefix.isBlank()) {
+            String cleanPrefix = taskPrefix.trim().replaceAll("^\\[|\\]$", "").trim();
+            if (!cleanPrefix.isEmpty()) {
+                if (isPrefixAlreadyInMessage(msg, cleanPrefix)) {
+                    return msg;
+                }
+                String tag = "[" + cleanPrefix + "]";
+                return msg.isEmpty() ? tag : tag + " " + msg;
+            }
+        }
+        return msg;
+    }
+
+    public static boolean isPrefixAlreadyInMessage(@Nullable String msg, @Nullable String prefix) {
+        if (msg == null || msg.isBlank() || prefix == null || prefix.isBlank()) {
+            return false;
+        }
+        String cleanPrefix = prefix.trim().replaceAll("^\\[|\\]$", "").trim();
+        if (cleanPrefix.isEmpty()) {
+            return false;
+        }
+        // Match cleanPrefix case-insensitively when bounded by non-alphanumeric/non-identifier characters or string boundaries
+        // Matches e.g. "[PREFIX]", "PREFIX: ...", "PREFIX - ...", "PREFIX ...", "Fix for PREFIX"
+        java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
+                "(?i)(^|[^a-zA-Z0-9_-])" + java.util.regex.Pattern.quote(cleanPrefix) + "([^a-zA-Z0-9_-]|$)"
+        );
+        return pattern.matcher(msg).find();
+    }
+
+    public String getTaskPrefix() {
+        return taskPrefix;
+    }
+
+    public void setTaskPrefix(String taskPrefix) {
+        this.taskPrefix = taskPrefix;
+    }
+
+    public String getCommitMessage() {
+        return commitMessage;
+    }
+
+    public void setCommitMessage(String commitMessage) {
+        this.commitMessage = commitMessage;
+    }
+
+    public boolean isPrefixMessageWithTask() {
+        return prefixMessageWithTask;
+    }
+
+    public void setPrefixMessageWithTask(boolean prefixMessageWithTask) {
+        this.prefixMessageWithTask = prefixMessageWithTask;
+    }
+
+    public String getChangelistName() {
+        return changelistName;
+    }
+
+    public void setChangelistName(String changelistName) {
+        this.changelistName = changelistName;
+    }
+
+    public List<BranchMapping> getBranchMappings() {
+        return branchMappings;
+    }
+
+    public boolean isFetchOriginFirst() {
+        return fetchOriginFirst;
+    }
+
+    public void setFetchOriginFirst(boolean fetchOriginFirst) {
+        this.fetchOriginFirst = fetchOriginFirst;
+    }
+
+    public boolean isPushAfterCommit() {
+        return pushAfterCommit;
+    }
+
+    public void setPushAfterCommit(boolean pushAfterCommit) {
+        this.pushAfterCommit = pushAfterCommit;
+    }
+
+    public boolean isPremergeTargetBranch() {
+        return premergeTargetBranch;
+    }
+
+    public void setPremergeTargetBranch(boolean premergeTargetBranch) {
+        this.premergeTargetBranch = premergeTargetBranch;
+    }
+
+    public boolean isGenerateMrLinks() {
+        return generateMrLinks;
+    }
+
+    public void setGenerateMrLinks(boolean generateMrLinks) {
+        this.generateMrLinks = generateMrLinks;
+    }
+
+    public boolean isOpenMrLinksInBrowser() {
+        return openMrLinksInBrowser;
+    }
+
+    public void setOpenMrLinksInBrowser(boolean openMrLinksInBrowser) {
+        this.openMrLinksInBrowser = openMrLinksInBrowser;
+    }
+
+    public boolean isStashOtherChanges() {
+        return stashOtherChanges;
+    }
+
+    public void setStashOtherChanges(boolean stashOtherChanges) {
+        this.stashOtherChanges = stashOtherChanges;
+    }
+
+    public boolean isCheckoutTestAfter() {
+        return checkoutTestAfter;
+    }
+
+    public void setCheckoutTestAfter(boolean checkoutTestAfter) {
+        this.checkoutTestAfter = checkoutTestAfter;
+    }
+
+    public String getCheckoutBranch() {
+        return checkoutBranch;
+    }
+
+    public void setCheckoutBranch(String checkoutBranch) {
+        this.checkoutBranch = checkoutBranch;
+    }
+
+    public boolean isGitLabCreateMr() {
+        return gitLabCreateMr;
+    }
+
+    public void setGitLabCreateMr(boolean gitLabCreateMr) {
+        this.gitLabCreateMr = gitLabCreateMr;
+    }
+
+    public boolean isGitLabAssignToMe() {
+        return gitLabAssignToMe;
+    }
+
+    public void setGitLabAssignToMe(boolean gitLabAssignToMe) {
+        this.gitLabAssignToMe = gitLabAssignToMe;
+    }
+
+    public boolean isGitLabDeleteSourceBranch() {
+        return gitLabDeleteSourceBranch;
+    }
+
+    public void setGitLabDeleteSourceBranch(boolean gitLabDeleteSourceBranch) {
+        this.gitLabDeleteSourceBranch = gitLabDeleteSourceBranch;
+    }
+
+    public boolean isGitLabSquashCommits() {
+        return gitLabSquashCommits;
+    }
+
+    public void setGitLabSquashCommits(boolean gitLabSquashCommits) {
+        this.gitLabSquashCommits = gitLabSquashCommits;
+    }
+
+    public String getGitLabHost() {
+        return gitLabHost;
+    }
+
+    public void setGitLabHost(String gitLabHost) {
+        this.gitLabHost = gitLabHost != null ? gitLabHost.trim() : "";
+    }
+
+    public String getGitLabApiToken() {
+        return gitLabApiToken;
+    }
+
+    public void setGitLabApiToken(String gitLabApiToken) {
+        this.gitLabApiToken = gitLabApiToken != null ? gitLabApiToken.trim() : "";
+    }
+}
