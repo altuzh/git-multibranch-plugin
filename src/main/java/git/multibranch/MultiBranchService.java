@@ -109,6 +109,17 @@ public class MultiBranchService {
                                 " -> localBranch=" + bm.getLocalBranchName(config.getTaskPrefix()));
                     }
 
+                    indicator.setText("Checking Git remote availability...");
+                    GitResult remoteCheck = checkGitRemoteOnline(repoDir);
+                    if (remoteCheck.exitCode != 0) {
+                        String details = remoteCheck.stderr != null && !remoteCheck.stderr.isBlank()
+                                ? remoteCheck.stderr.trim()
+                                : "Unable to reach remote 'origin'.";
+                        MultiBranchLog.error("Git remote 'origin' is not available online: " + details);
+                        notifyError(project, "Git remote 'origin' is not available online. Execution aborted.\n" + details);
+                        return;
+                    }
+
                     indicator.setText("Preparing changes from changelist '" + config.getChangelistName() + "'...");
 
                     // 1. Fetch origin
@@ -1064,7 +1075,21 @@ public class MultiBranchService {
         });
     }
 
+    /**
+     * Checks whether the 'origin' Git remote is reachable online using {@code git ls-remote}.
+     */
+    public static GitResult checkGitRemoteOnline(File repoDir) {
+        if (repoDir == null || !repoDir.exists()) {
+            return new GitResult(-1, "", "Repository directory does not exist.");
+        }
+        return runGitWithTimeout(repoDir, 15, "ls-remote", "--heads", "origin");
+    }
+
     public static GitResult runGit(File workingDir, String... args) {
+        return runGitWithTimeout(workingDir, 120, args);
+    }
+
+    public static GitResult runGitWithTimeout(File workingDir, int timeoutSeconds, String... args) {
         long startTime = System.currentTimeMillis();
         try {
             List<String> cmd = new ArrayList<>();
@@ -1101,14 +1126,14 @@ public class MultiBranchService {
             outThread.start();
             errThread.start();
 
-            boolean finished = p.waitFor(120, java.util.concurrent.TimeUnit.SECONDS);
+            boolean finished = p.waitFor(timeoutSeconds, java.util.concurrent.TimeUnit.SECONDS);
             if (!finished) {
                 p.destroyForcibly();
                 outThread.interrupt();
                 errThread.interrupt();
                 long duration = System.currentTimeMillis() - startTime;
-                MultiBranchLog.logGitCommand(workingDir, args, -1, duration, stdout.toString(), "Git command timed out after 120 seconds");
-                return new GitResult(-1, stdout.toString(), "Git command timed out after 120 seconds: git " + String.join(" ", args));
+                MultiBranchLog.logGitCommand(workingDir, args, -1, duration, stdout.toString(), "Git command timed out after " + timeoutSeconds + " seconds");
+                return new GitResult(-1, stdout.toString(), "Git command timed out after " + timeoutSeconds + " seconds: git " + String.join(" ", args));
             }
 
             outThread.join(2000);

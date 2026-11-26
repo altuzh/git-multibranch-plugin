@@ -1846,6 +1846,41 @@ public class BranchSettingsTest {
             } catch (Exception ignored) {}
         }
     }
+
+    @Test
+    public void testCheckGitRemoteOnline() throws Exception {
+        MultiBranchService.GitResult nullRes = MultiBranchService.checkGitRemoteOnline(null);
+        assertNotEquals(0, nullRes.exitCode);
+
+        MultiBranchService.GitResult missingRes = MultiBranchService.checkGitRemoteOnline(new File("nonexistent_dir_123456"));
+        assertNotEquals(0, missingRes.exitCode);
+
+        Path tempDir = Files.createTempDirectory("mb_remote_check_test_");
+        try {
+            File bareRemote = tempDir.resolve("remote.git").toFile();
+            assertTrue(bareRemote.mkdirs());
+            assertEquals(0, MultiBranchService.runGit(bareRemote, "init", "--bare").exitCode);
+
+            File localRepo = tempDir.resolve("local").toFile();
+            assertTrue(localRepo.mkdirs());
+            assertEquals(0, MultiBranchService.runGit(localRepo, "init").exitCode);
+            assertEquals(0, MultiBranchService.runGit(localRepo, "remote", "add", "origin", bareRemote.getAbsolutePath()).exitCode);
+
+            MultiBranchService.GitResult okRes = MultiBranchService.checkGitRemoteOnline(localRepo);
+            assertEquals(0, okRes.exitCode, "Expected reachable origin to succeed, stderr: " + okRes.stderr);
+
+            File unreachableRemote = tempDir.resolve("deleted_remote.git").toFile();
+            assertEquals(0, MultiBranchService.runGit(localRepo, "remote", "set-url", "origin", unreachableRemote.getAbsolutePath()).exitCode);
+
+            MultiBranchService.GitResult failRes = MultiBranchService.checkGitRemoteOnline(localRepo);
+            assertNotEquals(0, failRes.exitCode, "Expected unreachable origin to fail");
+            assertFalse(failRes.stderr.isBlank(), "Expected error details in stderr");
+        } finally {
+            try (var stream = Files.walk(tempDir)) {
+                stream.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+            } catch (Exception ignored) {}
+        }
+    }
 }
 
 
